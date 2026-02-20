@@ -33,7 +33,7 @@
         composer.addPass(new RenderPass(scene, camera));
         composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85));
 
-        // Building Generation (Must match server coordinates)
+        // Building Generation (Must match Server coordinates)
         const buildings = [
             { x: 100, z: 100, w: 40, d: 40, h: 50 },
             { x: -150, z: -50, w: 50, d: 30, h: 80 },
@@ -48,7 +48,6 @@
             building.position.set(b.x, b.h / 2, b.z);
             scene.add(building);
 
-            // Add neon edges
             const edges = new THREE.EdgesGeometry(geometry);
             const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x00ffff }));
             line.position.copy(building.position);
@@ -66,17 +65,26 @@
         let playerCar, playerTeam;
         const otherPlayers = {}, botCars = {};
         let currentZones = { red: {x:0, z:0}, blue: {x:0, z:0} };
-        let speed = 0, driftAngle = 0;
+        
+        // Physics Variables
+        let speed = 0;
+        let driftAngle = 0;
 
         function createCar(team) {
             const color = (team === 'red') ? 0xff0000 : 0x0066ff;
             const carGroup = new THREE.Group();
-            const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 3), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.8 }));
+
+            // Main Body
+            const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 3), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.5 }));
             body.position.y = 0.5;
             carGroup.add(body);
+
+            // Cabin
             const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 1.2), new THREE.MeshStandardMaterial({ color: 0x111111 }));
             cabin.position.set(0, 0.9, -0.2);
             carGroup.add(cabin);
+
+            // Wheels
             const wheelGeom = new THREE.CylinderGeometry(0.35, 0.35, 0.3, 12);
             wheelGeom.rotateZ(Math.PI / 2);
             const wheelMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
@@ -87,6 +95,14 @@
                 carGroup.add(w);
             });
             return carGroup;
+        }
+
+        // Collision Check Function
+        function checkCollision(x, z) {
+            return buildings.some(b => {
+                return x > b.x - (b.w/2 + 1) && x < b.x + (b.w/2 + 1) &&
+                       z > b.z - (b.d/2 + 1) && z < b.z + (b.d/2 + 1);
+            });
         }
 
         socket.on('zonesUpdate', (z) => {
@@ -126,27 +142,43 @@
         function animate() {
             requestAnimationFrame(animate);
             if (playerCar) {
-                if (keys['KeyW']) speed += keys['Space'] ? 0.015 : 0.007;
-                if (keys['KeyS']) speed -= 0.007;
-                speed *= 0.95;
+                // NITRO BOOST: If Space is held, speed increases much faster and has higher cap
+                const isNitro = keys['Space'];
+                const accel = isNitro ? 0.03 : 0.008;
+                const friction = 0.95;
+
+                if (keys['KeyW']) speed += accel;
+                if (keys['KeyS']) speed -= 0.008;
+                speed *= friction;
+
                 if (keys['KeyA']) playerCar.rotation.y += 0.04;
                 if (keys['KeyD']) playerCar.rotation.y -= 0.04;
 
+                // Drift Logic
                 driftAngle += (playerCar.rotation.y - driftAngle) * 0.12;
-                playerCar.position.x += Math.sin(driftAngle) * speed;
-                playerCar.position.z += Math.cos(driftAngle) * speed;
+                
+                let nextX = playerCar.position.x + Math.sin(driftAngle) * speed;
+                let nextZ = playerCar.position.z + Math.cos(driftAngle) * speed;
+
+                // Building Collision Handling
+                if (!checkCollision(nextX, nextZ)) {
+                    playerCar.position.x = nextX;
+                    playerCar.position.z = nextZ;
+                } else {
+                    speed *= -0.5; // Bounce back slightly
+                }
 
                 socket.emit('playerMovement', { x: playerCar.position.x, z: playerCar.position.z, rot: playerCar.rotation.y });
 
                 const offset = new THREE.Vector3(0, 8, -15).applyMatrix4(playerCar.matrixWorld);
                 camera.position.lerp(offset, 0.1); camera.lookAt(playerCar.position);
 
+                // Minimap
                 mapCtx.clearRect(0,0,200,200);
                 const toMap = (val) => (val / 1000) * 200 + 100;
-                mapCtx.strokeStyle = '#ff0000'; mapCtx.strokeRect(toMap(currentZones.red.x)-5, toMap(currentZones.red.z)-5, 10, 10);
-                mapCtx.strokeStyle = '#0000ff'; mapCtx.strokeRect(toMap(currentZones.blue.x)-5, toMap(currentZones.blue.z)-5, 10, 10);
+                mapCtx.strokeStyle = '#f00'; mapCtx.strokeRect(toMap(currentZones.red.x)-5, toMap(currentZones.red.z)-5, 10, 10);
+                mapCtx.strokeStyle = '#00f'; mapCtx.strokeRect(toMap(currentZones.blue.x)-5, toMap(currentZones.blue.z)-5, 10, 10);
                 
-                // Draw buildings on map
                 mapCtx.fillStyle = '#444';
                 buildings.forEach(b => mapCtx.fillRect(toMap(b.x)-b.w/10, toMap(b.z)-b.d/10, b.w/5, b.d/5));
 
