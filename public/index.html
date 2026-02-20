@@ -1,21 +1,17 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Neon Racer: Complete</title>
+    <title>Neon Racer: Zone Battle</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: monospace; }
         #ui { position: absolute; top: 20px; left: 20px; color: #fff; z-index: 10; pointer-events: none; }
         #minimap { position: absolute; top: 20px; right: 20px; width: 200px; height: 200px; background: rgba(0,0,0,0.8); border: 2px solid #fff; border-radius: 5px; z-index: 30; }
-        #chat-container { position: absolute; bottom: 20px; left: 20px; width: 300px; background: rgba(0,0,0,0.8); border: 2px solid #fff; padding: 10px; z-index: 20; }
-        #messages { height: 100px; overflow-y: auto; color: #fff; margin-bottom: 10px; font-size: 12px; }
-        #chat-input { width: 92%; background: #000; border: 1px solid #fff; color: #fff; padding: 5px; outline: none; }
         .red { color: #ff0000; } .blue { color: #0088ff; }
     </style>
 </head>
 <body>
     <div id="ui"><h1>NEON RACER</h1><p id="t-info">SYNCING...</p></div>
     <canvas id="minimap"></canvas>
-    <div id="chat-container"><div id="messages"></div><input type="text" id="chat-input" placeholder="Press Enter to Chat..."></div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script type="importmap">{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }</script>
@@ -40,37 +36,41 @@
         const mapCanvas = document.getElementById('minimap');
         const mapCtx = mapCanvas.getContext('2d');
 
-        // Zones
         const zoneRed = new THREE.Mesh(new THREE.BoxGeometry(25, 1, 25), new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.4 }));
         const zoneBlue = new THREE.Mesh(new THREE.BoxGeometry(25, 1, 25), new THREE.MeshBasicMaterial({ color: 0x0000ff, transparent: true, opacity: 0.4 }));
         scene.add(zoneRed, zoneBlue);
-
         scene.add(new THREE.GridHelper(1000, 50, 0x444444, 0x222222));
-
-        // RESTORED: Skyscraper Generation & Hitboxes
-        const obstacles = [];
-        const neonColors = [0x00ffff, 0xff00ff, 0xffff00, 0x00ff00, 0xff0000, 0xffa500];
-        for(let i = 0; i < 60; i++) {
-            const h = 80 + Math.random() * 150;
-            const w = 15 + Math.random() * 10;
-            const color = neonColors[Math.floor(Math.random() * neonColors.length)];
-            const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), new THREE.MeshStandardMaterial({ color: 0x111111, emissive: color, emissiveIntensity: 1 }));
-            const x = (Math.random()-0.5)*850;
-            const z = (Math.random()-0.5)*850;
-            b.position.set(x, h/2, z);
-            scene.add(b);
-            obstacles.push({ x, z, size: w/2 + 1.5 });
-        }
 
         let playerCar, playerTeam;
         const otherPlayers = {}, botCars = {};
-        let currentZones = { red: {x:350, z:0}, blue: {x:-350, z:0} };
+        let currentZones = { red: {x:0, z:0}, blue: {x:0, z:0} };
+        let speed = 0, driftAngle = 0;
 
         function createCar(team) {
             const color = (team === 'red') ? 0xff0000 : 0x0066ff;
-            const g = new THREE.Group();
-            const b = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.6, 3), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 2 }));
-            b.position.y = 0.3; g.add(b); return g;
+            const carGroup = new THREE.Group();
+
+            // Body
+            const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 3), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.8 }));
+            body.position.y = 0.5;
+            carGroup.add(body);
+
+            // Cabin
+            const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 1.2), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+            cabin.position.set(0, 0.9, -0.2);
+            carGroup.add(cabin);
+
+            // Wheels
+            const wheelGeom = new THREE.CylinderGeometry(0.35, 0.35, 0.3, 12);
+            wheelGeom.rotateZ(Math.PI / 2);
+            const wheelMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
+            const wheelPos = [{x:0.8, z:0.9}, {x:-0.8, z:0.9}, {x:0.8, z:-0.9}, {x:-0.8, z:-0.9}];
+            wheelPos.forEach(p => {
+                const w = new THREE.Mesh(wheelGeom, wheelMat);
+                w.position.set(p.x, 0.35, p.z);
+                carGroup.add(w);
+            });
+            return carGroup;
         }
 
         socket.on('zonesUpdate', (z) => {
@@ -85,6 +85,7 @@
                     playerTeam = ps[id].team;
                     document.getElementById('t-info').innerHTML = `TEAM: <span class="${playerTeam}">${playerTeam.toUpperCase()}</span>`;
                     playerCar = createCar(playerTeam); scene.add(playerCar);
+                    driftAngle = playerCar.rotation.y;
                 } else {
                     otherPlayers[id] = createCar(ps[id].team); otherPlayers[id].team = ps[id].team; scene.add(otherPlayers[id]);
                 }
@@ -102,52 +103,24 @@
         socket.on('botRemoved', (id) => { if(botCars[id]) { scene.remove(botCars[id]); delete botCars[id]; }});
         socket.on('playerMoved', (d) => { if(otherPlayers[d.id]) { otherPlayers[d.id].position.set(d.info.x, 0, d.info.z); otherPlayers[d.id].rotation.y = d.info.rot; }});
 
-        // Chat Logic (Fixed so it doesn't move car)
-        const chatInput = document.getElementById('chat-input');
-        chatInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && chatInput.value.trim() !== '') {
-                socket.emit('chatMessage', chatInput.value); chatInput.value = ''; chatInput.blur();
-            }
-        });
-        socket.on('chatMessage', (d) => {
-            const m = document.createElement('div'); m.innerHTML = `<b>${d.id.substring(0,4)}:</b> ${d.msg}`;
-            document.getElementById('messages').appendChild(m);
-            document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
-        });
-
         const keys = {};
-        window.onkeydown = (e) => { if(document.activeElement !== chatInput) keys[e.code] = true; };
+        window.onkeydown = (e) => keys[e.code] = true;
         window.onkeyup = (e) => keys[e.code] = false;
 
-        let speed = 0;
         function animate() {
             requestAnimationFrame(animate);
             if (playerCar) {
-                // MASSIVE SPEED INCREASE
-                const accel = keys['Space'] ? 0.03 : 0.01;
-                if (keys['KeyW']) speed += accel;
-                if (keys['KeyS']) speed -= 0.01;
+                if (keys['KeyW']) speed += keys['Space'] ? 0.015 : 0.007;
+                if (keys['KeyS']) speed -= 0.007;
                 speed *= 0.95;
 
-                // Collision Logic (Restored)
-                const nextX = playerCar.position.x + Math.sin(playerCar.rotation.y) * speed;
-                const nextZ = playerCar.position.z + Math.cos(playerCar.rotation.y) * speed;
-                
-                let hit = false;
-                for(let obs of obstacles) {
-                    const dx = nextX - obs.x;
-                    const dz = nextZ - obs.z;
-                    if(Math.sqrt(dx*dx + dz*dz) < obs.size) { hit = true; break; }
-                }
+                if (keys['KeyA']) playerCar.rotation.y += 0.04;
+                if (keys['KeyD']) playerCar.rotation.y -= 0.04;
 
-                if(!hit) {
-                    playerCar.translateZ(speed);
-                } else {
-                    speed = -speed * 0.5; // Bounce
-                }
-
-                if (keys['KeyA']) playerCar.rotation.y += 0.05;
-                if (keys['KeyD']) playerCar.rotation.y -= 0.05;
+                // Drift Physics: momentum (driftAngle) lags behind car rotation
+                driftAngle += (playerCar.rotation.y - driftAngle) * 0.12;
+                playerCar.position.x += Math.sin(driftAngle) * speed;
+                playerCar.position.z += Math.cos(driftAngle) * speed;
 
                 socket.emit('playerMovement', { x: playerCar.position.x, z: playerCar.position.z, rot: playerCar.rotation.y });
 
@@ -157,11 +130,8 @@
                 // Minimap
                 mapCtx.clearRect(0,0,200,200);
                 const toMap = (val) => (val / 1000) * 200 + 100;
-                
-                if (currentZones.red) {
-                    mapCtx.strokeStyle = '#ff0000'; mapCtx.strokeRect(toMap(currentZones.red.x)-5, toMap(currentZones.red.z)-5, 10, 10);
-                    mapCtx.strokeStyle = '#0000ff'; mapCtx.strokeRect(toMap(currentZones.blue.x)-5, toMap(currentZones.blue.z)-5, 10, 10);
-                }
+                mapCtx.strokeStyle = '#ff0000'; mapCtx.strokeRect(toMap(currentZones.red.x)-5, toMap(currentZones.red.z)-5, 10, 10);
+                mapCtx.strokeStyle = '#0000ff'; mapCtx.strokeRect(toMap(currentZones.blue.x)-5, toMap(currentZones.blue.z)-5, 10, 10);
 
                 const drawDot = (x, z, c) => {
                     mapCtx.fillStyle = c; mapCtx.beginPath(); mapCtx.arc(toMap(x), toMap(z), 3, 0, Math.PI*2); mapCtx.fill();
@@ -173,11 +143,6 @@
             composer.render();
         }
         animate();
-
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth/window.innerHeight; camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        });
     </script>
 </body>
 </html>
