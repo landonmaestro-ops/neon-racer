@@ -1,20 +1,20 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Neon Racer: Zone Battle</title>
+    <title>Neon Hunter: Arena</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: monospace; }
-        #ui { position: absolute; top: 20px; left: 20px; color: #fff; z-index: 10; pointer-events: none; }
-        #minimap { position: absolute; top: 20px; right: 20px; width: 200px; height: 200px; background: rgba(0,0,0,0.8); border: 2px solid #fff; z-index: 30; }
-        .red { color: #ff0000; } .blue { color: #0088ff; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', monospace; }
+        #ui { position: absolute; top: 20px; left: 20px; color: #fff; z-index: 10; pointer-events: none; text-shadow: 0 0 10px #0ff; }
+        #minimap { position: absolute; top: 20px; right: 20px; width: 180px; height: 180px; background: rgba(0,0,0,0.9); border: 1px solid #0ff; z-index: 30; }
+        .red { color: #ff3333; } .blue { color: #33aaff; }
     </style>
 </head>
 <body>
     <div id="ui">
-        <h1>NEON RACER</h1>
-        <div id="score-board">SCORE: <span class="red" id="score-red">0</span> | <span class="blue" id="score-blue">0</span></div>
-        <div id="timer" style="color:#0ff">ZONE ROTATION: 04:00</div>
-        <p id="t-info">SYNCING...</p>
+        <h1>NEON HUNTER</h1>
+        <div id="score-board">ARENA SCORE: <span class="red" id="score-red">0</span> | <span class="blue" id="score-blue">0</span></div>
+        <div id="timer" style="color:#0ff">NEXT ROTATION: 04:00</div>
+        <p id="t-info">INITIALIZING...</p>
     </div>
     <canvas id="minimap"></canvas>
 
@@ -29,19 +29,20 @@
 
         const socket = io();
         const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 2000);
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
 
         const composer = new EffectComposer(renderer);
         composer.addPass(new RenderPass(scene, camera));
-        composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85));
+        composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.8, 0.4, 0.85));
 
-        const buildings = [{x:100,z:100,w:40,d:40,h:50},{x:-150,z:-50,w:50,d:30,h:80},{x:50,z:-200,w:30,d:60,h:40},{x:200,z:150,w:40,d:40,h:60}];
+        // Tighter Map Layout
+        const buildings = [{x:60,z:60,w:40,d:40,h:50},{x:-80,z:-30,w:50,d:30,h:80},{x:30,z:-120,w:30,d:60,h:40},{x:120,z:90,w:40,d:40,h:60}];
         buildings.forEach(b => {
             const geo = new THREE.BoxGeometry(b.w, b.h, b.d);
-            const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({color:0x111111}));
+            const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({color:0x050505}));
             m.position.set(b.x, b.h/2, b.z); scene.add(m);
             const l = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({color:0x00ffff}));
             l.position.copy(m.position); scene.add(l);
@@ -50,7 +51,7 @@
         const zoneRed = new THREE.Mesh(new THREE.BoxGeometry(25,1,25), new THREE.MeshBasicMaterial({color:0xff0000, transparent:true, opacity:0.3}));
         const zoneBlue = new THREE.Mesh(new THREE.BoxGeometry(25,1,25), new THREE.MeshBasicMaterial({color:0x0000ff, transparent:true, opacity:0.3}));
         scene.add(zoneRed, zoneBlue);
-        scene.add(new THREE.GridHelper(1000, 50, 0x444444, 0x222222));
+        scene.add(new THREE.GridHelper(500, 25, 0x333333, 0x111111));
 
         let playerCar, playerTeam, speed = 0, driftAngle = 0;
         const otherPlayers = {}, botCars = {}, projectiles = [], particles = [];
@@ -59,37 +60,41 @@
         function createCar(team) {
             const color = (team === 'red') ? 0xff0000 : 0x0066ff;
             const group = new THREE.Group();
-            const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 3), new THREE.MeshStandardMaterial({color, emissive:color, emissiveIntensity:1.2}));
+            const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 3), new THREE.MeshStandardMaterial({color, emissive:color, emissiveIntensity:1.5}));
             body.position.y = 0.5; group.add(body);
             
             const hp = new THREE.Mesh(new THREE.PlaneGeometry(2, 0.2), new THREE.MeshBasicMaterial({color:0x00ff00, side:THREE.DoubleSide}));
             hp.position.y = 2.2; hp.name = "hpBar"; group.add(hp);
 
             const wG = new THREE.CylinderGeometry(0.35,0.35,0.3,10); wG.rotateZ(Math.PI/2);
-            [{x:0.8,z:1},{x:-0.8,z:1},{x:0.8,z:-1},{x:-0.8,z:-1}].forEach(p => {
-                const w = new THREE.Mesh(wG, new THREE.MeshStandardMaterial({color:0x222222}));
+            [{x:0.8,z:1.1},{x:-0.8,z:1.1},{x:0.8,z:-1.1},{x:-0.8,z:-1.1}].forEach(p => {
+                const w = new THREE.Mesh(wG, new THREE.MeshStandardMaterial({color:0x111111}));
                 w.position.set(p.x, 0.35, p.z); group.add(w);
             });
             return group;
         }
 
         socket.on('explosion', (d) => {
-            for(let i=0; i<20; i++) {
-                const p = new THREE.Mesh(new THREE.SphereGeometry(0.2), new THREE.MeshBasicMaterial({color:d.color}));
+            for(let i=0; i<25; i++) {
+                const p = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), new THREE.MeshBasicMaterial({color:d.color}));
                 p.position.set(d.x, 0.5, d.z); scene.add(p);
-                particles.push({m:p, v:new THREE.Vector3((Math.random()-0.5)*0.5, Math.random()*0.5, (Math.random()-0.5)*0.5), t:60});
+                particles.push({m:p, v:new THREE.Vector3((Math.random()-0.5)*0.8, Math.random()*0.8, (Math.random()-0.5)*0.8), t:50});
             }
         });
 
         socket.on('projectileSpawned', (p) => {
-            const m = new THREE.Mesh(new THREE.SphereGeometry(0.3), new THREE.MeshBasicMaterial({color:0xffffff}));
+            const m = new THREE.Mesh(new THREE.SphereGeometry(0.4), new THREE.MeshBasicMaterial({color:0xffffff}));
             m.position.set(p.x, 0.5, p.z); scene.add(m);
-            projectiles.push({ mesh: m, vx: Math.sin(p.rot)*2, vz: Math.cos(p.rot)*2, owner: p.owner, team: p.team, bounces: 0 });
+            projectiles.push({ mesh: m, vx: Math.sin(p.rot)*2.2, vz: Math.cos(p.rot)*2.2, owner: p.owner, team: p.team, bounces: 0 });
         });
 
         socket.on('healthUpdate', (d) => {
             const c = d.type === 'player' ? (d.id === socket.id ? playerCar : otherPlayers[d.id]) : botCars[d.id];
-            if(c) { const b = c.getObjectByName("hpBar"); b.scale.x = d.health/2; b.material.color.setHex(d.health < 2 ? 0xffff00 : 0x00ff00); }
+            if(c) { 
+                const b = c.getObjectByName("hpBar"); 
+                b.scale.x = Math.max(0, d.health/2); 
+                b.material.color.setHex(d.health < 2 ? 0xffaa00 : 0x00ff00); 
+            }
         });
 
         socket.on('playerReset', (d) => { if(d.id === socket.id) { playerCar.position.set(0,0,0); speed = 0; }});
@@ -98,7 +103,7 @@
             Object.keys(ps).forEach(id => {
                 if(id === socket.id) { 
                     playerTeam = ps[id].team; playerCar = createCar(playerTeam); scene.add(playerCar); 
-                    document.getElementById('t-info').innerHTML = `TEAM: <span class="${playerTeam}">${playerTeam.toUpperCase()}</span>`;
+                    document.getElementById('t-info').innerHTML = `ASSIGNED TO <span class="${playerTeam}">TEAM ${playerTeam.toUpperCase()}</span>`;
                 } else { otherPlayers[id] = createCar(ps[id].team); otherPlayers[id].team = ps[id].team; scene.add(otherPlayers[id]); }
             });
         });
@@ -113,62 +118,56 @@
         socket.on('botRemoved', (id) => { if(botCars[id]){ scene.remove(botCars[id]); delete botCars[id]; }});
         socket.on('playerMoved', (d) => { if(otherPlayers[d.id]){ otherPlayers[d.id].position.set(d.info.x, 0, d.info.z); otherPlayers[d.id].rotation.y = d.info.rot; }});
         socket.on('zonesUpdate', (z) => { zoneRed.position.set(z.red.x,0,z.red.z); zoneBlue.position.set(z.blue.x,0,z.blue.z); });
-        socket.on('timerUpdate', (t) => { const m = Math.floor(t/60), s = t%60; document.getElementById('timer').innerText = `ZONE ROTATION: ${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`; });
+        socket.on('timerUpdate', (t) => { const m = Math.floor(t/60), s = t%60; document.getElementById('timer').innerText = `NEXT ROTATION: ${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`; });
         socket.on('scoreUpdate', (s) => { document.getElementById('score-red').innerText = s.red; document.getElementById('score-blue').innerText = s.blue; });
 
         const keys = {};
         window.onkeydown = (e) => keys[e.code] = true; window.onkeyup = (e) => keys[e.code] = false;
         window.onmousedown = () => { if(playerCar){ 
-            const p = {x:playerCar.position.x, z:playerCar.position.z, rot:playerCar.rotation.y, owner:socket.id, team:playerTeam};
-            socket.emit('shoot', p);
-            const m = new THREE.Mesh(new THREE.SphereGeometry(0.3), new THREE.MeshBasicMaterial({color:0xffffff}));
-            m.position.set(p.x, 0.5, p.z); scene.add(m);
-            projectiles.push({ mesh: m, vx: Math.sin(p.rot)*2, vz: Math.cos(p.rot)*2, owner: socket.id, team: playerTeam, bounces: 0 });
+            socket.emit('shoot', {x:playerCar.position.x, z:playerCar.position.z, rot:playerCar.rotation.y, owner:socket.id, team:playerTeam});
+            const m = new THREE.Mesh(new THREE.SphereGeometry(0.4), new THREE.MeshBasicMaterial({color:0xffffff}));
+            m.position.set(playerCar.position.x, 0.5, playerCar.position.z); scene.add(m);
+            projectiles.push({ mesh: m, vx: Math.sin(playerCar.rotation.y)*2.2, vz: Math.cos(playerCar.rotation.y)*2.2, owner: socket.id, team: playerTeam, bounces: 0 });
         }};
 
         function animate() {
             requestAnimationFrame(animate);
             if (playerCar) {
-                if(keys['KeyW']) speed += keys['Space'] ? 0.03 : 0.008;
-                if(keys['KeyS']) speed -= 0.008;
-                speed *= 0.95;
-                if(keys['KeyA']) playerCar.rotation.y += 0.04;
-                if(keys['KeyD']) playerCar.rotation.y -= 0.04;
+                if(keys['KeyW']) speed += keys['Space'] ? 0.035 : 0.009; // Slightly buffed acceleration
+                if(keys['KeyS']) speed -= 0.01;
+                speed *= 0.96;
+                if(keys['KeyA']) playerCar.rotation.y += 0.045;
+                if(keys['KeyD']) playerCar.rotation.y -= 0.045;
 
-                driftAngle += (playerCar.rotation.y - driftAngle) * 0.12;
+                driftAngle += (playerCar.rotation.y - driftAngle) * 0.15;
                 let nx = playerCar.position.x + Math.sin(driftAngle) * speed;
                 let nz = playerCar.position.z + Math.cos(driftAngle) * speed;
 
-                const hitWall = buildings.some(b => nx > b.x-b.w/2-1 && nx < b.x+b.w/2+1 && nz > b.z-b.d/2-1 && nz < b.z+b.d/2+1);
-                const hitCar = [...Object.values(otherPlayers), ...Object.values(botCars)].some(c => new THREE.Vector3(nx, 0, nz).distanceTo(c.position) < 2.5);
+                const hitWall = buildings.some(b => nx > b.x-b.w/2-1.5 && nx < b.x+b.w/2+1.5 && nz > b.z-b.d/2-1.5 && nz < b.z+b.d/2+1.5);
+                const hitCar = [...Object.values(otherPlayers), ...Object.values(botCars)].some(c => new THREE.Vector3(nx, 0, nz).distanceTo(c.position) < 2.6);
 
-                if (!hitWall && !hitCar) { playerCar.position.x = nx; playerCar.position.z = nz; } else { speed *= -0.5; }
+                if (!hitWall && !hitCar) { playerCar.position.x = nx; playerCar.position.z = nz; } else { speed *= -0.6; }
 
                 socket.emit('playerMovement', { x: playerCar.position.x, z: playerCar.position.z, rot: playerCar.rotation.y });
-                camera.position.lerp(new THREE.Vector3(0, 8, -15).applyMatrix4(playerCar.matrixWorld), 0.1); camera.lookAt(playerCar.position);
+                camera.position.lerp(new THREE.Vector3(0, 10, -18).applyMatrix4(playerCar.matrixWorld), 0.12); camera.lookAt(playerCar.position);
 
-                // Projectile Physics (Bouncing)
                 for(let i=projectiles.length-1; i>=0; i--){
-                    const p = projectiles[i]; 
-                    p.mesh.position.x += p.vx; p.mesh.position.z += p.vz;
-                    
-                    // Bounce off buildings
+                    const p = projectiles[i]; p.mesh.position.x += p.vx; p.mesh.position.z += p.vz;
                     buildings.forEach(b => {
                         if (p.mesh.position.x > b.x-b.w/2 && p.mesh.position.x < b.x+b.w/2 && p.mesh.position.z > b.z-b.d/2 && p.mesh.position.z < b.z+b.d/2) {
                             if (Math.abs(p.mesh.position.x - b.x) > Math.abs(p.mesh.position.z - b.z)) p.vx *= -1; else p.vz *= -1;
                             p.bounces++;
                         }
                     });
-
                     if(p.owner === socket.id){
                         [...Object.entries(otherPlayers), ...Object.entries(botCars)].forEach(([id, c]) => {
-                            if(p.mesh.position.distanceTo(c.position) < 2 && c.team !== p.team){
+                            if(p.mesh.position.distanceTo(c.position) < 2.5 && c.team !== p.team){
                                 socket.emit('hit', {id, type: id.startsWith('bot') ? 'bot' : 'player', attackerTeam: p.team, impactX: c.position.x, impactZ: c.position.z});
                                 scene.remove(p.mesh); projectiles.splice(i,1);
                             }
                         });
                     }
-                    if(p.mesh && (p.mesh.position.length() > 1000 || p.bounces > 5)){ scene.remove(p.mesh); projectiles.splice(i,1); }
+                    if(p.mesh && (p.mesh.position.length() > 600 || p.bounces > 4)){ scene.remove(p.mesh); projectiles.splice(i,1); }
                 }
 
                 for(let i=particles.length-1; i>=0; i--){
@@ -178,10 +177,9 @@
 
                 [playerCar, ...Object.values(otherPlayers), ...Object.values(botCars)].forEach(c => c.getObjectByName("hpBar").lookAt(camera.position));
 
-                // Minimap Restore
-                mapCtx.clearRect(0,0,200,200);
-                const toM = (v) => (v / 1000) * 200 + 100;
-                mapCtx.fillStyle = '#444'; buildings.forEach(b => mapCtx.fillRect(toM(b.x)-b.w/10, toM(b.z)-b.d/10, b.w/5, b.d/5));
+                mapCtx.clearRect(0,0,180,180);
+                const toM = (v) => (v / 400) * 180 + 90;
+                mapCtx.fillStyle = '#222'; buildings.forEach(b => mapCtx.fillRect(toM(b.x)-b.w/4, toM(b.z)-b.d/4, b.w/2, b.d/2));
                 mapCtx.strokeStyle = '#f00'; mapCtx.strokeRect(toM(zoneRed.position.x)-5, toM(zoneRed.position.z)-5, 10, 10);
                 mapCtx.strokeStyle = '#00f'; mapCtx.strokeRect(toM(zoneBlue.position.x)-5, toM(zoneBlue.position.z)-5, 10, 10);
                 const dot = (x,z,c) => { mapCtx.fillStyle=c; mapCtx.beginPath(); mapCtx.arc(toM(x),toM(z),3,0,Math.PI*2); mapCtx.fill(); };
