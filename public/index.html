@@ -354,6 +354,12 @@
             font-size: 20px;
             margin-top: 20px;
         }
+
+        .error-message {
+            color: #ff4444;
+            font-size: 16px;
+            margin-top: 10px;
+        }
     </style>
 </head>
 <body>
@@ -380,7 +386,8 @@
         <button class="class-btn smg" data-class="SMG">SMG</button>
         <button class="class-btn shotgun" data-class="SHOTGUN">Shotgun</button>
     </div>
-    <div id="connectionStatus" class="loading">Connecting to server...</div>
+    <div id="connectionStatus" class="loading">Initializing...</div>
+    <div id="errorMessage" class="error-message"></div>
 </div>
 
 <div id="spectatorScreen" class="hidden">
@@ -410,8 +417,8 @@
     <div id="ammo">Kills: 0</div>
 </div>
 
-<!-- Load Socket.IO FIRST -->
-<script src="/socket.io/socket.io.js"></script>
+<!-- Load Socket.IO client from CDN as fallback, or local -->
+<script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
 
 <script type="module">
 import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
@@ -463,6 +470,9 @@ const classColors = {
 
 // --- INIT ---
 function init() {
+    // Update status
+    updateStatus('Connecting to server...', 'loading');
+    
     // Setup Socket.IO connection
     setupSocketConnection();
     
@@ -476,196 +486,217 @@ function init() {
     animate();
 }
 
+function updateStatus(msg, type) {
+    const statusDiv = document.getElementById('connectionStatus');
+    const errorDiv = document.getElementById('errorMessage');
+    statusDiv.textContent = msg;
+    statusDiv.className = type;
+    if (type === 'error') {
+        errorDiv.textContent = msg;
+    } else {
+        errorDiv.textContent = '';
+    }
+}
+
 function setupSocketConnection() {
-    // Connect to server
-    socket = io();
-    
-    // Connection status
-    socket.on('connect', () => {
-        console.log('Connected to server:', socket.id);
-        document.getElementById('connectionStatus').textContent = 'Connected! Select a class to join.';
-        document.getElementById('connectionStatus').style.color = '#00ff00';
-    });
-    
-    socket.on('connect_error', (err) => {
-        console.error('Connection error:', err);
-        document.getElementById('connectionStatus').textContent = 'Connection failed. Retrying...';
-        document.getElementById('connectionStatus').style.color = '#ff0000';
-    });
-    
-    // Game events
-    socket.on('joined', (data) => {
-        console.log('Joined game:', data);
-        myId = data.id;
-        document.getElementById('menu').classList.add('hidden');
-        document.getElementById('connectionStatus').textContent = 'Waiting for round to start...';
-        updateGunVisibility();
-    });
-    
-    socket.on('lobbyMode', (data) => {
-        console.log('In lobby, time until start:', data.timeUntilStart);
-        document.getElementById('menu').classList.remove('hidden');
-        document.getElementById('spectatorScreen').classList.add('hidden');
-        document.getElementById('roundEndScreen').classList.add('hidden');
-        document.getElementById('ui').classList.add('hidden');
-    });
-    
-    socket.on('spectatorMode', (data) => {
-        console.log('Spectator mode:', data);
-        gameState = 'PLAYING';
-        document.getElementById('menu').classList.add('hidden');
-        document.getElementById('spectatorScreen').classList.remove('hidden');
-        document.getElementById('ui').classList.add('hidden');
-        
-        document.getElementById('spectatorInfo').innerHTML = `
-            <p style="color: #ffaa00; font-size: 18px; margin-bottom: 15px;">
-                ${data.message}
-            </p>
-            <p>Time Remaining: ${Math.ceil(data.timeRemaining)}s</p>
-        `;
-    });
-    
-    socket.on('roundStart', (data) => {
-        console.log('Round started!');
-        gameState = 'PLAYING';
-        isAlive = true;
-        myKills = 0;
-        
-        document.getElementById('menu').classList.add('hidden');
-        document.getElementById('spectatorScreen').classList.add('hidden');
-        document.getElementById('roundEndScreen').classList.add('hidden');
-        document.getElementById('ui').classList.remove('hidden');
-        
-        // Show click to play
-        document.getElementById('clickToPlay').style.display = 'block';
-        document.getElementById('blocker').style.display = 'block';
-    });
-    
-    socket.on('roundEnd', (data) => {
-        console.log('Round ended:', data);
-        gameState = 'ENDED';
-        isAlive = false;
-        
-        if (controls) controls.unlock();
-        
-        document.getElementById('ui').classList.add('hidden');
-        document.getElementById('clickToPlay').style.display = 'none';
-        document.getElementById('blocker').style.display = 'none';
-        document.getElementById('roundEndScreen').classList.remove('hidden');
-        
-        const winner = data.leaderboard[0];
-        document.getElementById('winnerAnnouncement').innerHTML = 
-            `🏆 Winner: ${winner.name} with ${winner.kills} kills!`;
-        
-        const lbDiv = document.getElementById('finalLeaderboard');
-        lbDiv.innerHTML = data.leaderboard.map((entry, i) => `
-            <div class="leaderboard-entry ${entry.alive ? 'alive' : 'dead'}">
-                <span>#${i + 1} ${entry.name}</span>
-                <span>${entry.kills} kills</span>
-                <span class="status-badge ${entry.alive ? 'alive' : 'dead'}">
-                    ${entry.alive ? 'SURVIVED' : 'ELIMINATED'}
-                </span>
-            </div>
-        `).join('');
-        
-        let countdown = 60;
-        const cdDiv = document.getElementById('nextRoundCountdown');
-        const interval = setInterval(() => {
-            countdown--;
-            cdDiv.textContent = `Next round starting in: ${countdown}`;
-            if (countdown <= 0) clearInterval(interval);
-        }, 1000);
-    });
-    
-    socket.on('worldUpdate', (state) => {
-        gameState = state.state;
-        
-        // Update timer
-        const minutes = Math.floor(state.time / 60);
-        const seconds = state.time % 60;
-        document.getElementById('timer').textContent = 
-            `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-        
-        // Update entities
-        state.entities.forEach(entity => {
-            if (entity.id === myId) {
-                // Update my position
-                if (isAlive && controls && controls.isLocked) {
-                    const targetPos = new THREE.Vector3(entity.x, entity.y, entity.z);
-                    controls.getObject().position.lerp(targetPos, 0.3);
-                } else if (controls) {
-                    controls.getObject().position.set(entity.x, entity.y, entity.z);
-                }
-                
-                document.getElementById('health').textContent = `HP: ${Math.ceil(entity.hp)}`;
-                document.getElementById('ammo').textContent = `Kills: ${entity.kills}`;
-                myKills = entity.kills;
-                isAlive = entity.alive;
-                
-                if (!entity.alive && controls && controls.isLocked) {
-                    controls.unlock();
-                    document.getElementById('clickToPlay').style.display = 'none';
-                }
-                return;
-            }
-            
-            updateEntityMesh(entity);
+    // Connect to server - auto-detect URL
+    try {
+        socket = io({
+            transports: ['websocket', 'polling'],
+            reconnection: true,
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000
         });
         
-        // Cleanup removed entities
-        for (const id in entities) {
-            if (!state.entities.find(e => e.id === id)) {
-                scene.remove(entities[id]);
-                delete entities[id];
+        // Connection events
+        socket.on('connect', () => {
+            console.log('Connected to server:', socket.id);
+            updateStatus('Connected! Select a class to join.', 'success');
+        });
+        
+        socket.on('connect_error', (err) => {
+            console.error('Connection error:', err);
+            updateStatus('Connection failed: ' + err.message, 'error');
+        });
+        
+        socket.on('disconnect', (reason) => {
+            console.log('Disconnected:', reason);
+            updateStatus('Disconnected: ' + reason, 'error');
+        });
+        
+        // Game events
+        socket.on('joined', (data) => {
+            console.log('Joined game:', data);
+            myId = data.id;
+            document.getElementById('menu').classList.add('hidden');
+            updateStatus('Waiting for round to start...', 'loading');
+        });
+        
+        socket.on('lobbyMode', (data) => {
+            console.log('In lobby, time until start:', data.timeUntilStart);
+            document.getElementById('menu').classList.remove('hidden');
+            document.getElementById('spectatorScreen').classList.add('hidden');
+            document.getElementById('roundEndScreen').classList.add('hidden');
+            document.getElementById('ui').classList.add('hidden');
+        });
+        
+        socket.on('spectatorMode', (data) => {
+            console.log('Spectator mode:', data);
+            gameState = 'PLAYING';
+            document.getElementById('menu').classList.add('hidden');
+            document.getElementById('spectatorScreen').classList.remove('hidden');
+            document.getElementById('ui').classList.add('hidden');
+            
+            document.getElementById('spectatorInfo').innerHTML = `
+                <p style="color: #ffaa00; font-size: 18px; margin-bottom: 15px;">
+                    ${data.message}
+                </p>
+                <p>Time Remaining: ${Math.ceil(data.timeRemaining)}s</p>
+            `;
+        });
+        
+        socket.on('roundStart', (data) => {
+            console.log('Round started!');
+            gameState = 'PLAYING';
+            isAlive = true;
+            myKills = 0;
+            
+            document.getElementById('menu').classList.add('hidden');
+            document.getElementById('spectatorScreen').classList.add('hidden');
+            document.getElementById('roundEndScreen').classList.add('hidden');
+            document.getElementById('ui').classList.remove('hidden');
+            
+            // Show click to play
+            document.getElementById('clickToPlay').style.display = 'block';
+            document.getElementById('blocker').style.display = 'block';
+        });
+        
+        socket.on('roundEnd', (data) => {
+            console.log('Round ended:', data);
+            gameState = 'ENDED';
+            isAlive = false;
+            
+            if (controls) controls.unlock();
+            
+            document.getElementById('ui').classList.add('hidden');
+            document.getElementById('clickToPlay').style.display = 'none';
+            document.getElementById('blocker').style.display = 'none';
+            document.getElementById('roundEndScreen').classList.remove('hidden');
+            
+            const winner = data.leaderboard[0];
+            document.getElementById('winnerAnnouncement').innerHTML = 
+                `🏆 Winner: ${winner.name} with ${winner.kills} kills!`;
+            
+            const lbDiv = document.getElementById('finalLeaderboard');
+            lbDiv.innerHTML = data.leaderboard.map((entry, i) => `
+                <div class="leaderboard-entry ${entry.alive ? 'alive' : 'dead'}">
+                    <span>#${i + 1} ${entry.name}</span>
+                    <span>${entry.kills} kills</span>
+                    <span class="status-badge ${entry.alive ? 'alive' : 'dead'}">
+                        ${entry.alive ? 'SURVIVED' : 'ELIMINATED'}
+                    </span>
+                </div>
+            `).join('');
+            
+            let countdown = 60;
+            const cdDiv = document.getElementById('nextRoundCountdown');
+            const interval = setInterval(() => {
+                countdown--;
+                cdDiv.textContent = `Next round starting in: ${countdown}`;
+                if (countdown <= 0) clearInterval(interval);
+            }, 1000);
+        });
+        
+        socket.on('worldUpdate', (state) => {
+            gameState = state.state;
+            
+            // Update timer
+            const minutes = Math.floor(state.time / 60);
+            const seconds = state.time % 60;
+            document.getElementById('timer').textContent = 
+                `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            
+            // Update entities
+            state.entities.forEach(entity => {
+                if (entity.id === myId) {
+                    // Update my position
+                    if (isAlive && controls && controls.isLocked) {
+                        const targetPos = new THREE.Vector3(entity.x, entity.y, entity.z);
+                        controls.getObject().position.lerp(targetPos, 0.3);
+                    } else if (controls) {
+                        controls.getObject().position.set(entity.x, entity.y, entity.z);
+                    }
+                    
+                    document.getElementById('health').textContent = `HP: ${Math.ceil(entity.hp)}`;
+                    document.getElementById('ammo').textContent = `Kills: ${entity.kills}`;
+                    myKills = entity.kills;
+                    isAlive = entity.alive;
+                    
+                    if (!entity.alive && controls && controls.isLocked) {
+                        controls.unlock();
+                        document.getElementById('clickToPlay').style.display = 'none';
+                    }
+                    return;
+                }
+                
+                updateEntityMesh(entity);
+            });
+            
+            // Cleanup removed entities
+            for (const id in entities) {
+                if (!state.entities.find(e => e.id === id)) {
+                    scene.remove(entities[id]);
+                    delete entities[id];
+                }
             }
-        }
-        
-        // Update leaderboard
-        updateLeaderboard(state.entities);
-        
-        // Update kill feed
-        if (state.killFeed) {
-            const feedDiv = document.getElementById('killFeed');
-            feedDiv.innerHTML = state.killFeed.map(k => 
-                `<div class="killMsg">${k.msg}</div>`
-            ).join('');
-        }
-    });
-    
-    socket.on('tracer', (data) => {
-        createTracer(data.origin, data.direction);
-        
-        // Spatial audio
-        if (controls) {
-            const myPos = controls.getObject().position;
-            const dist = Math.hypot(
-                data.origin.x - myPos.x,
-                data.origin.z - myPos.z
-            );
-            if (dist < 50) {
-                playSound('shoot', 0.2 * (1 - dist/50));
+            
+            // Update leaderboard
+            updateLeaderboard(state.entities);
+            
+            // Update kill feed
+            if (state.killFeed) {
+                const feedDiv = document.getElementById('killFeed');
+                feedDiv.innerHTML = state.killFeed.map(k => 
+                    `<div class="killMsg">${k.msg}</div>`
+                ).join('');
             }
-        }
-    });
-    
-    socket.on('hitMarker', (data) => {
-        const ch = document.getElementById('crosshair');
-        ch.classList.add('hit');
-        if (data.kill) {
-            playSound('hit', 0.5);
-        }
-        setTimeout(() => {
-            ch.classList.remove('hit');
-        }, 150);
-    });
-    
-    socket.on('killFeed', (data) => {
-        // Handled in worldUpdate
-    });
-    
-    socket.on('error', (data) => {
-        alert(data.msg);
-    });
+        });
+        
+        socket.on('tracer', (data) => {
+            createTracer(data.origin, data.direction);
+            
+            // Spatial audio
+            if (controls) {
+                const myPos = controls.getObject().position;
+                const dist = Math.hypot(
+                    data.origin.x - myPos.x,
+                    data.origin.z - myPos.z
+                );
+                if (dist < 50) {
+                    playSound('shoot', 0.2 * (1 - dist/50));
+                }
+            }
+        });
+        
+        socket.on('hitMarker', (data) => {
+            const ch = document.getElementById('crosshair');
+            ch.classList.add('hit');
+            if (data.kill) {
+                playSound('hit', 0.5);
+            }
+            setTimeout(() => {
+                ch.classList.remove('hit');
+            }, 150);
+        });
+        
+        socket.on('error', (data) => {
+            alert(data.msg);
+        });
+        
+    } catch (e) {
+        console.error('Socket setup error:', e);
+        updateStatus('Failed to initialize: ' + e.message, 'error');
+    }
 }
 
 function setupScene() {
@@ -865,7 +896,11 @@ function setupUI() {
             myName = nameInput.value.trim() || `Player_${Math.floor(Math.random() * 1000)}`;
             
             console.log('Emitting joinGame:', { name: myName, classType: myClass });
-            socket.emit('joinGame', { name: myName, classType: myClass });
+            if (socket && socket.connected) {
+                socket.emit('joinGame', { name: myName, classType: myClass });
+            } else {
+                updateStatus('Not connected to server!', 'error');
+            }
         });
     });
 }
@@ -930,10 +965,12 @@ function shoot() {
     camera.getWorldPosition(origin);
     origin.y -= 0.2;
 
-    socket.emit('shoot', {
-        origin: { x: origin.x, y: origin.y, z: origin.z },
-        direction: { x: dir.x, y: dir.y, z: dir.z }
-    });
+    if (socket) {
+        socket.emit('shoot', {
+            origin: { x: origin.x, y: origin.y, z: origin.z },
+            direction: { x: dir.x, y: dir.y, z: dir.z }
+        });
+    }
 
     createTracer(origin, dir);
     playSound('shoot', 0.3);
