@@ -9,24 +9,25 @@ app.use(express.static(path.join(__dirname, 'public')));
 let players = {};
 let bots = {};
 const TOTAL_CARS = 10;
+const MAP_SIZE = 400; // Shrunk map size
 let scores = { red: 0, blue: 0 };
 let zoneTimer = 240;
 
 const buildings = [
-    { x: 100, z: 100, w: 40, d: 40, h: 50 },
-    { x: -150, z: -50, w: 50, d: 30, h: 80 },
-    { x: 50, z: -200, w: 30, d: 60, h: 40 },
-    { x: 200, z: 150, w: 40, d: 40, h: 60 }
+    { x: 60, z: 60, w: 40, d: 40, h: 50 },
+    { x: -80, z: -30, w: 50, d: 30, h: 80 },
+    { x: 30, z: -120, w: 30, d: 60, h: 40 },
+    { x: 120, z: 90, w: 40, d: 40, h: 60 }
 ];
 
-let zones = { red: { x: 350, z: 0 }, blue: { x: -350, z: 0 } };
+let zones = { red: { x: 150, z: 0 }, blue: { x: -150, z: 0 } };
 
 function isOverBuilding(x, z) {
-    return buildings.some(b => x > b.x - (b.w/2 + 20) && x < b.x + (b.w/2 + 20) && z > b.z - (b.d/2 + 20) && z < b.z + (b.d/2 + 20));
+    return buildings.some(b => x > b.x - (b.w/2 + 15) && x < b.x + (b.w/2 + 15) && z > b.z - (b.d/2 + 15) && z < b.z + (b.d/2 + 15));
 }
 
 function rotateZones() {
-    const distance = 350;
+    const distance = 150;
     let rx, rz, bx, bz, found = false;
     while (!found) {
         let a = Math.random() * Math.PI * 2;
@@ -44,12 +45,9 @@ setInterval(() => {
     io.emit('timerUpdate', zoneTimer);
 }, 1000);
 
-// Strict Team Balancing & Bot Refill
 function updateBots() {
     const pIds = Object.keys(players);
     const botsNeeded = Math.max(0, TOTAL_CARS - pIds.length);
-    
-    // Clear current bots to re-calc team balance properly
     Object.keys(bots).forEach(id => { delete bots[id]; io.emit('botRemoved', id); });
 
     let redTotal = pIds.filter(id => players[id].team === 'red').length;
@@ -59,29 +57,36 @@ function updateBots() {
         const id = 'bot_' + Math.random().toString(36).substr(2, 5);
         const team = (redTotal <= blueTotal) ? 'red' : 'blue';
         if (team === 'red') redTotal++; else blueTotal++;
-        
-        bots[id] = { 
-            x: (Math.random()-0.5)*400, 
-            z: (Math.random()-0.5)*400, 
-            rot: 0, 
-            team: team, 
-            health: 2, 
-            speed: 0.7,
-            lastShot: 0 
-        };
+        bots[id] = { x: (Math.random()-0.5)*200, z: (Math.random()-0.5)*200, rot: 0, team, health: 2, speed: 0.75, lastShot: 0 };
     }
 }
 
-// Bot AI: Movement + Combat
+// Bot AI: HUNT PRIORITY
 setInterval(() => {
     Object.keys(bots).forEach(id => {
         const bot = bots[id];
-        const targetZone = zones[bot.team];
-        if (!targetZone) return;
+        let targetPos = zones[bot.team];
+        let closestEnemy = null;
+        let minDist = Infinity;
 
-        // Movement
-        const dx = targetZone.x - bot.x;
-        const dz = targetZone.z - bot.z;
+        // Find nearest enemy (Player or Bot)
+        const enemies = [...Object.entries(players), ...Object.entries(bots)].filter(([eid, e]) => e.team !== bot.team && eid !== id);
+        
+        enemies.forEach(([eid, e]) => {
+            const d = Math.sqrt((e.x - bot.x)**2 + (e.z - bot.z)**2);
+            if (d < minDist) { minDist = d; closestEnemy = e; }
+        });
+
+        // Priority: If enemy exists, hunt them. Otherwise, go to zone.
+        if (closestEnemy && minDist < 250) {
+            targetPos = { x: closestEnemy.x, z: closestEnemy.z };
+            // Nitro Boost for Bots if far from target
+            bot.speed = minDist > 50 ? 1.2 : 0.75; 
+        } else {
+            bot.speed = 0.75;
+        }
+
+        const dx = targetPos.x - bot.x, dz = targetPos.z - bot.z;
         const targetRot = Math.atan2(dx, dz);
         let diff = targetRot - bot.rot;
         while (diff < -Math.PI) diff += Math.PI * 2;
@@ -90,30 +95,21 @@ setInterval(() => {
         bot.x += Math.sin(bot.rot) * bot.speed;
         bot.z += Math.cos(bot.rot) * bot.speed;
 
-        // Combat Logic: Scan for enemies
+        // Shooting
         const now = Date.now();
-        if (now - bot.lastShot > 3000) { // Shoot every 3 seconds if enemy near
-            const enemies = [...Object.entries(players), ...Object.entries(bots)].filter(([eid, e]) => e.team !== bot.team);
-            for (let [eid, e] of enemies) {
-                const dist = Math.sqrt((e.x - bot.x)**2 + (e.z - bot.z)**2);
-                if (dist < 40) {
-                    const shootRot = Math.atan2(e.x - bot.x, e.z - bot.z);
-                    io.emit('projectileSpawned', { x: bot.x, z: bot.z, rot: shootRot, owner: id, team: bot.team });
-                    bot.lastShot = now;
-                    break; 
-                }
-            }
+        if (closestEnemy && minDist < 60 && now - bot.lastShot > 2000) {
+            io.emit('projectileSpawned', { x: bot.x, z: bot.z, rot: Math.atan2(closestEnemy.x - bot.x, closestEnemy.z - bot.z), owner: id, team: bot.team });
+            bot.lastShot = now;
         }
     });
     io.emit('botUpdate', bots);
 }, 50);
 
-// Scoring
 setInterval(() => {
     let rIn = 0, bIn = 0;
     const all = [...Object.values(players), ...Object.values(bots)];
     all.forEach(c => {
-        const z = zones[c.team];
+        const z = zones[c.team === 'red' ? 'red' : 'blue'];
         if (Math.sqrt((c.x-z.x)**2 + (c.z-z.z)**2) < 15) {
             if (c.team === 'red') rIn++; else bIn++;
         }
@@ -123,14 +119,10 @@ setInterval(() => {
 }, 1000);
 
 io.on('connection', (socket) => {
-    // Balanced join logic
     const reds = Object.values(players).filter(p => p.team === 'red').length;
     const blues = Object.values(players).filter(p => p.team === 'blue').length;
-    const team = (reds <= blues) ? 'red' : 'blue';
-    
-    players[socket.id] = { x: 0, z: 0, rot: 0, team, health: 2 };
+    players[socket.id] = { x: 0, z: 0, rot: 0, team: reds <= blues ? 'red' : 'blue', health: 2 };
     updateBots();
-    
     socket.emit('currentPlayers', players);
     socket.emit('zonesUpdate', zones);
 
@@ -148,7 +140,7 @@ io.on('connection', (socket) => {
         if (t && t.team !== data.attackerTeam) {
             t.health -= 1;
             if (t.health <= 0) {
-                t.x = 0; t.z = 0; t.health = 2;
+                t.x = (Math.random()-0.5)*50; t.z = (Math.random()-0.5)*50; t.health = 2;
                 io.emit('explosion', { x: data.impactX, z: data.impactZ, color: t.team === 'red' ? 0xff0000 : 0x0066ff });
                 if (data.type === 'player') io.emit('playerReset', { id: data.id });
             }
@@ -159,4 +151,4 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => { delete players[socket.id]; updateBots(); io.emit('playerDisconnected', socket.id); });
 });
 
-http.listen(3000, () => console.log('SERVER READY - 5VS5 ACTIVE'));
+http.listen(3000, () => console.log('BATTLE ARENA ONLINE'));
