@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Neon Hunter Arena</title>
+    <title>Neon Hunter: Arena Physics</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: monospace; }
         #ui { position: absolute; top: 20px; left: 20px; color: #fff; pointer-events: none; z-index: 10; }
@@ -10,7 +10,7 @@
 </head>
 <body>
     <div id="ui">
-        <h2 id="team-display">JOINING...</h2>
+        <h2 id="team-display">ARENA ACTIVE</h2>
         <div>SCORE: <span class="red" id="sr">0</span> | <span class="blue" id="sb">0</span></div>
     </div>
     <script src="/socket.io/socket.io.js"></script>
@@ -33,10 +33,9 @@
         composer.addPass(new RenderPass(scene, camera));
         composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85));
 
-        // Arena Setup
         const buildings = [{x:60,z:60,w:40,d:40,h:50},{x:-80,z:-30,w:50,d:30,h:80},{x:30,z:-120,w:30,d:60,h:40},{x:120,z:90,w:40,d:40,h:60}];
         buildings.forEach(b => {
-            const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.w, b.h, b.d), new THREE.MeshStandardMaterial({color: 0x0a0a0a}));
+            const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.w, b.h, b.d), new THREE.MeshStandardMaterial({color: 0x050505}));
             mesh.position.set(b.x, b.h/2, b.z); scene.add(mesh);
             const edge = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry), new THREE.LineBasicMaterial({color: 0x00ffff}));
             edge.position.copy(mesh.position); scene.add(edge);
@@ -47,17 +46,15 @@
         scene.add(zoneRed, zoneBlue, new THREE.GridHelper(400, 20, 0x222222, 0x111111));
 
         let playerCar, playerTeam, speed = 0, ghostTimer = 0;
-        const otherPlayers = {}, botCars = {}, projectiles = [], particles = [];
+        const otherPlayers = {}, botCars = {}, projectiles = [];
 
         function createCar(team) {
             const color = (team === 'red') ? 0xff0000 : 0x0066ff;
             const group = new THREE.Group();
             const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.6, 3), new THREE.MeshStandardMaterial({color, emissive:color, emissiveIntensity:1}));
             body.position.y = 0.5; group.add(body);
-            
             const hp = new THREE.Mesh(new THREE.PlaneGeometry(2, 0.2), new THREE.MeshBasicMaterial({color: 0x00ff00, side: THREE.DoubleSide}));
             hp.position.y = 2.5; hp.name = "hpBar"; group.add(hp);
-
             const shield = new THREE.Mesh(new THREE.IcosahedronGeometry(2.5, 1), new THREE.MeshBasicMaterial({color: 0x00ffff, wireframe: true, transparent: true, opacity: 0}));
             shield.name = "shield"; shield.position.y = 0.5; group.add(shield);
             return group;
@@ -105,23 +102,50 @@
             if (playerCar) {
                 const s = playerCar.getObjectByName("shield");
                 if(ghostTimer > 0) {
-                    ghostTimer--; s.material.opacity = Math.sin(Date.now()*0.01)*0.3 + 0.3; s.rotation.y += 0.05;
+                    ghostTimer--; s.material.opacity = 0.4; s.rotation.y += 0.05;
                 } else { s.material.opacity = 0; }
 
-                if(keys['KeyW']) speed += 0.008; if(keys['KeyS']) speed -= 0.008;
+                // --- NITRO BOOST RESTORED ---
+                let accel = 0.008;
+                if(keys['Space']) accel = 0.025; // Nitro value
+
+                if(keys['KeyW']) speed += accel; 
+                if(keys['KeyS']) speed -= accel;
                 speed *= 0.96;
-                if(keys['KeyA']) playerCar.rotation.y += 0.04; if(keys['KeyD']) playerCar.rotation.y -= 0.04;
+                if(keys['KeyA']) playerCar.rotation.y += 0.045; 
+                if(keys['KeyD']) playerCar.rotation.y -= 0.045;
 
                 let nx = playerCar.position.x + Math.sin(playerCar.rotation.y) * speed;
                 let nz = playerCar.position.z + Math.cos(playerCar.rotation.y) * speed;
 
+                // Wall Collision
                 const hitWall = buildings.some(b => nx > b.x-b.w/2-1 && nx < b.x+b.w/2+1 && nz > b.z-b.d/2-1 && nz < b.z+b.d/2+1);
-                const hitCar = ghostTimer > 0 ? false : [...Object.values(otherPlayers), ...Object.values(botCars)].some(c => nx > c.position.x-2 && nx < c.position.x+2 && nz > c.position.z-2 && nz < c.position.z+2);
+                
+                // --- BOUNCE PHYSICS ---
+                let bounceX = 0, bounceZ = 0;
+                if(ghostTimer <= 0) {
+                    [...Object.values(otherPlayers), ...Object.values(botCars)].forEach(c => {
+                        const dist = new THREE.Vector3(nx, 0, nz).distanceTo(c.position);
+                        if(dist < 2.8) {
+                            // Calculate bounce vector
+                            bounceX = (nx - c.position.x) * 0.5;
+                            bounceZ = (nz - c.position.z) * 0.5;
+                            speed *= -0.5; // Reverse speed on impact
+                        }
+                    });
+                }
 
-                if(!hitWall && !hitCar) { playerCar.position.x = nx; playerCar.position.z = nz; } else { speed *= -0.5; }
+                if(!hitWall) { 
+                    playerCar.position.x = nx + bounceX; 
+                    playerCar.position.z = nz + bounceZ; 
+                } else { 
+                    speed *= -0.6; 
+                }
+
                 socket.emit('playerMovement', {x: playerCar.position.x, z: playerCar.position.z, rot: playerCar.rotation.y});
                 camera.position.lerp(new THREE.Vector3(0, 15, -20).applyMatrix4(playerCar.matrixWorld), 0.1); camera.lookAt(playerCar.position);
 
+                // Projectile Logic (Mortality Included)
                 for(let i = projectiles.length-1; i >= 0; i--) {
                     const p = projectiles[i]; p.life++;
                     p.mesh.position.x += p.vx; p.mesh.position.z += p.vz;
@@ -132,7 +156,7 @@
                         }
                     });
 
-                    // LOCAL DAMAGE CHECK: Every player checks if THEY get hit by an enemy shot
+                    // Player mortality check
                     if (p.team !== playerTeam && ghostTimer <= 0) {
                         if (p.mesh.position.distanceTo(playerCar.position) < 2.5) {
                             socket.emit('hit', {id: socket.id, type: 'player', x: p.mesh.position.x, z: p.mesh.position.z});
@@ -141,7 +165,7 @@
                         }
                     }
 
-                    // BOT DAMAGE CHECK: Done by the projectile owner to keep it simple
+                    // Bot damage check
                     if (p.owner === socket.id) {
                         Object.entries(botCars).forEach(([id, bot]) => {
                             if (p.mesh.position.distanceTo(bot.position) < 2.5 && bot.team !== p.team) {
