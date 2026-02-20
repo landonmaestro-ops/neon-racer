@@ -1,51 +1,29 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Neon Racer Multiplayer</title>
+    <title>Neon Racer: Cyber City</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: monospace; }
-        #ui { position: absolute; top: 20px; left: 20px; color: #0ff; z-index: 10; pointer-events: none; }
-        
-        /* Chat Styling */
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', Courier, monospace; }
+        #ui { position: absolute; top: 20px; left: 20px; color: #0ff; z-index: 10; pointer-events: none; text-shadow: 0 0 5px #0ff; }
         #chat-container {
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            width: 300px;
-            background: rgba(0, 0, 0, 0.7);
-            border: 2px solid #0ff;
-            padding: 10px;
-            z-index: 20;
-            box-shadow: 0 0 10px #0ff;
+            position: absolute; bottom: 20px; left: 20px; width: 300px;
+            background: rgba(0, 0, 0, 0.8); border: 2px solid #0ff; padding: 10px; z-index: 20;
         }
-        #messages {
-            height: 150px;
-            overflow-y: auto;
-            color: #0ff;
-            margin-bottom: 10px;
-            font-size: 14px;
-            word-wrap: break-word;
-        }
-        #chat-input {
-            width: 93%;
-            background: #000;
-            border: 1px solid #0ff;
-            color: #fff;
-            padding: 5px;
-            outline: none;
-        }
+        #messages { height: 120px; overflow-y: auto; color: #0ff; margin-bottom: 10px; font-size: 13px; }
+        #chat-input { width: 92%; background: #000; border: 1px solid #0ff; color: #fff; padding: 5px; outline: none; }
+        .nitro-bar { color: #f0f; font-weight: bold; }
     </style>
 </head>
 <body>
 
     <div id="ui">
-        <h1>NEON RACER</h1>
-        <p>WASD to Drive | Enter to Chat</p>
+        <h1>NEON RACER: CITY</h1>
+        <p>WASD: Drive | SPACE: <span class="nitro-bar">NITRO BOOST</span></p>
     </div>
 
     <div id="chat-container">
         <div id="messages"></div>
-        <input type="text" id="chat-input" placeholder="Type a message...">
+        <input type="text" id="chat-input" placeholder="Type to chat...">
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
@@ -61,21 +39,40 @@
 
         const socket = io();
         const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
 
-        // Neon Glow Effect
         const composer = new EffectComposer(renderer);
         composer.addPass(new RenderPass(scene, camera));
         const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
         composer.addPass(bloom);
 
-        // Environment
-        const grid = new THREE.GridHelper(500, 100, 0xff00ff, 0x222222);
-        scene.add(grid);
-        const light = new THREE.AmbientLight(0xffffff, 0.5);
+        // Environment: Huge Grid and Skyscrapers
+        scene.add(new THREE.GridHelper(2000, 100, 0xff00ff, 0x222222));
+        
+        function createBuildings() {
+            const colors = [0x00ffff, 0xff00ff, 0xffff00, 0x00ff00];
+            for(let i = 0; i < 60; i++) {
+                const h = 50 + Math.random() * 150; // Very tall
+                const w = 10 + Math.random() * 15;
+                const color = colors[Math.floor(Math.random() * colors.length)];
+                
+                const geo = new THREE.BoxGeometry(w, h, w);
+                const mat = new THREE.MeshStandardMaterial({ 
+                    color: 0x111111, emissive: color, emissiveIntensity: 0.5 
+                });
+                const b = new THREE.Mesh(geo, mat);
+                
+                // Spread them out significantly
+                b.position.set((Math.random() - 0.5) * 1000, h/2, (Math.random() - 0.5) * 1000);
+                scene.add(b);
+            }
+        }
+        createBuildings();
+
+        const light = new THREE.PointLight(0xffffff, 10, 500);
         scene.add(light);
 
         let playerCar;
@@ -83,16 +80,12 @@
 
         function createCar(color = 0x00ffff) {
             const group = new THREE.Group();
-            const body = new THREE.Mesh(
-                new THREE.BoxGeometry(1.5, 0.5, 3), 
-                new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 2 })
-            );
-            body.position.y = 0.25;
+            const body = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.6, 3), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 2 }));
+            body.position.y = 0.3;
             group.add(body);
             return group;
         }
 
-        // Multiplayer Events
         socket.on('currentPlayers', (players) => {
             Object.keys(players).forEach(id => {
                 if (id === socket.id) {
@@ -118,54 +111,57 @@
         });
 
         socket.on('playerDisconnected', (id) => {
-            if (otherPlayers[id]) {
-                scene.remove(otherPlayers[id]);
-                delete otherPlayers[id];
-            }
+            if (otherPlayers[id]) { scene.remove(otherPlayers[id]); delete otherPlayers[id]; }
         });
 
-        // Chat Logic
+        // Chat Input Logic
         const chatInput = document.getElementById('chat-input');
-        const messagesDiv = document.getElementById('messages');
-
         chatInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && chatInput.value.trim() !== '') {
                 socket.emit('chatMessage', chatInput.value);
                 chatInput.value = '';
-                chatInput.blur(); // Unfocus so WASD works again
+                chatInput.blur();
             }
         });
 
         socket.on('chatMessage', (data) => {
             const msg = document.createElement('div');
             msg.innerHTML = `<b>${data.id.substring(0, 5)}:</b> ${data.msg}`;
-            messagesDiv.appendChild(msg);
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            document.getElementById('messages').appendChild(msg);
+            document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
         });
 
-        // Movement Logic
+        // Driving & Nitro Physics
         const keys = {};
-        window.onkeydown = (e) => { if(document.activeElement !== chatInput) keys[e.key.toLowerCase()] = true; };
-        window.onkeyup = (e) => keys[e.key.toLowerCase()] = false;
+        window.onkeydown = (e) => { if(document.activeElement !== chatInput) keys[e.code] = true; };
+        window.onkeyup = (e) => keys[e.code] = false;
 
         let speed = 0;
         function animate() {
             requestAnimationFrame(animate);
             if (playerCar) {
-                if (keys['w']) speed += 0.005;
-                if (keys['s']) speed -= 0.005;
+                const isNitro = keys['Space'];
+                const accel = isNitro ? 0.015 : 0.005;
+                const maxFov = isNitro ? 85 : 75;
+
+                if (keys['KeyW']) speed += accel;
+                if (keys['KeyS']) speed -= accel;
                 speed *= 0.96; // Friction
+                
                 playerCar.translateZ(speed);
-                if (keys['a']) playerCar.rotation.y += 0.04;
-                if (keys['d']) playerCar.rotation.y -= 0.04;
+                if (keys['KeyA']) playerCar.rotation.y += 0.04;
+                if (keys['KeyD']) playerCar.rotation.y -= 0.04;
 
                 socket.emit('playerMovement', { x: playerCar.position.x, z: playerCar.position.z, rot: playerCar.rotation.y });
 
-                // Camera follow
-                const relativeCameraOffset = new THREE.Vector3(0, 5, -10);
-                const cameraOffset = relativeCameraOffset.applyMatrix4(playerCar.matrixWorld);
-                camera.position.lerp(cameraOffset, 0.1);
+                // Smooth Camera + Nitro Zoom
+                camera.fov = THREE.MathUtils.lerp(camera.fov, maxFov, 0.1);
+                camera.updateProjectionMatrix();
+                
+                const offset = new THREE.Vector3(0, 6, -12).applyMatrix4(playerCar.matrixWorld);
+                camera.position.lerp(offset, 0.1);
                 camera.lookAt(playerCar.position);
+                light.position.copy(playerCar.position).y += 5;
             }
             composer.render();
         }
