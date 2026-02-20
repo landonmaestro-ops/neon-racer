@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Neon Hunter: Final Fixes</title>
+    <title>Neon Hunter: Unstuck Edition</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', monospace; }
         #ui { position: absolute; top: 20px; left: 20px; color: #fff; z-index: 10; pointer-events: none; text-shadow: 0 0 10px #0ff; }
@@ -14,7 +14,7 @@
         <h1>NEON HUNTER</h1>
         <div id="score-board">ARENA SCORE: <span class="red" id="score-red">0</span> | <span class="blue" id="score-blue">0</span></div>
         <div id="timer" style="color:#0ff">NEXT ROTATION: 04:00</div>
-        <p id="t-info">INITIALIZING...</p>
+        <p id="t-info">SYSTEMS ONLINE</p>
     </div>
     <canvas id="minimap"></canvas>
 
@@ -52,7 +52,7 @@
         scene.add(zoneRed, zoneBlue);
         scene.add(new THREE.GridHelper(500, 25, 0x333333, 0x111111));
 
-        let playerCar, playerTeam, speed = 0, driftAngle = 0;
+        let playerCar, playerTeam, speed = 0, driftAngle = 0, spawnGhostTimer = 0;
         const otherPlayers = {}, botCars = {}, projectiles = [], particles = [];
         const mapCtx = document.getElementById('minimap').getContext('2d');
 
@@ -61,10 +61,8 @@
             const group = new THREE.Group();
             const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 3), new THREE.MeshStandardMaterial({color, emissive:color, emissiveIntensity:1.5}));
             body.position.y = 0.5; group.add(body);
-            
             const hp = new THREE.Mesh(new THREE.PlaneGeometry(2, 0.2), new THREE.MeshBasicMaterial({color:0x00ff00, side:THREE.DoubleSide}));
             hp.position.y = 2.2; hp.name = "hpBar"; group.add(hp);
-
             const wG = new THREE.CylinderGeometry(0.35,0.35,0.3,10); wG.rotateZ(Math.PI/2);
             [{x:0.8,z:1.1},{x:-0.8,z:1.1},{x:0.8,z:-1.1},{x:-0.8,z:-1.1}].forEach(p => {
                 const w = new THREE.Mesh(wG, new THREE.MeshStandardMaterial({color:0x111111}));
@@ -98,7 +96,9 @@
 
         socket.on('playerReset', (d) => { 
             if(d.id === socket.id && playerCar) { 
-                playerCar.position.set(d.x, 0, d.z); speed = 0; 
+                playerCar.position.set(d.x, 0, d.z); 
+                speed = 0;
+                spawnGhostTimer = 90; // 1.5 seconds of ghosting (60fps * 1.5)
                 const b = playerCar.getObjectByName("hpBar");
                 b.scale.x = 1; b.material.color.setHex(0x00ff00);
             }
@@ -129,7 +129,7 @@
 
         const keys = {};
         window.onkeydown = (e) => keys[e.code] = true; window.onkeyup = (e) => keys[e.code] = false;
-        window.onmousedown = () => { if(playerCar){ 
+        window.onmousedown = () => { if(playerCar && spawnGhostTimer <= 0){ 
             socket.emit('shoot', {x:playerCar.position.x, z:playerCar.position.z, rot:playerCar.rotation.y, owner:socket.id, team:playerTeam});
             const m = new THREE.Mesh(new THREE.SphereGeometry(0.4), new THREE.MeshBasicMaterial({color:0xffffff}));
             m.position.set(playerCar.position.x, 0.5, playerCar.position.z); scene.add(m);
@@ -139,6 +139,15 @@
         function animate() {
             requestAnimationFrame(animate);
             if (playerCar) {
+                if(spawnGhostTimer > 0) {
+                    spawnGhostTimer--;
+                    playerCar.children[0].material.opacity = 0.5;
+                    playerCar.children[0].material.transparent = true;
+                } else {
+                    playerCar.children[0].material.opacity = 1.0;
+                    playerCar.children[0].material.transparent = false;
+                }
+
                 if(keys['KeyW']) speed += keys['Space'] ? 0.035 : 0.009;
                 if(keys['KeyS']) speed -= 0.01;
                 speed *= 0.96;
@@ -150,7 +159,9 @@
                 let nz = playerCar.position.z + Math.cos(driftAngle) * speed;
 
                 const hitWall = buildings.some(b => nx > b.x-b.w/2-1.5 && nx < b.x+b.w/2+1.5 && nz > b.z-b.d/2-1.5 && nz < b.z+b.d/2+1.5);
-                const hitCar = [...Object.values(otherPlayers), ...Object.values(botCars)].some(c => new THREE.Vector3(nx, 0, nz).distanceTo(c.position) < 2.6);
+                
+                // GHOST CHECK: If ghosting, hitCar is always false
+                const hitCar = spawnGhostTimer > 0 ? false : [...Object.values(otherPlayers), ...Object.values(botCars)].some(c => new THREE.Vector3(nx, 0, nz).distanceTo(c.position) < 2.6);
 
                 if (!hitWall && !hitCar) { playerCar.position.x = nx; playerCar.position.z = nz; } else { speed *= -0.6; }
 
@@ -166,10 +177,11 @@
                         }
                     });
 
-                    // Collision checking handled by projectile owner
                     if(p.owner === socket.id){
                         [...Object.entries(otherPlayers), ...Object.entries(botCars), ["player", playerCar]].forEach(([id, c]) => {
-                            // Check if hitting an enemy player, bot, or even self (if it bounced back)
+                            // If player is ghosting, they can't be hit
+                            if(id === "player" && spawnGhostTimer > 0) return;
+                            
                             if(p.mesh.position.distanceTo(c.position) < 2.5){
                                 let carTeam = id === "player" ? playerTeam : c.team;
                                 if(carTeam !== p.team || p.bounces > 0){
