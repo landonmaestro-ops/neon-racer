@@ -348,6 +348,12 @@
         .click-to-play:hover {
             background: rgba(255,170,0,0.2);
         }
+
+        .loading {
+            color: #ffaa00;
+            font-size: 20px;
+            margin-top: 20px;
+        }
     </style>
 </head>
 <body>
@@ -374,6 +380,7 @@
         <button class="class-btn smg" data-class="SMG">SMG</button>
         <button class="class-btn shotgun" data-class="SHOTGUN">Shotgun</button>
     </div>
+    <div id="connectionStatus" class="loading">Connecting to server...</div>
 </div>
 
 <div id="spectatorScreen" class="hidden">
@@ -403,13 +410,14 @@
     <div id="ammo">Kills: 0</div>
 </div>
 
+<!-- Load Socket.IO FIRST -->
 <script src="/socket.io/socket.io.js"></script>
+
 <script type="module">
 import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
 import { PointerLockControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/PointerLockControls.js';
 
 // --- CONFIG ---
-const SOCKET = io();
 const WORLD_SIZE = 100;
 const FOV = 90;
 
@@ -418,7 +426,7 @@ let camera, scene, renderer, controls;
 let myId = null;
 let myClass = 'ASSAULT';
 let myName = '';
-let entities = {}; // All players and bots
+let entities = {};
 let gunModel = null;
 let tracers = [];
 let lastTime = performance.now();
@@ -431,6 +439,7 @@ let gameState = 'LOBBY';
 let myKills = 0;
 let isAlive = false;
 let canShoot = false;
+let socket = null;
 
 // Audio Context
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -454,6 +463,212 @@ const classColors = {
 
 // --- INIT ---
 function init() {
+    // Setup Socket.IO connection
+    setupSocketConnection();
+    
+    // Setup UI event listeners
+    setupUI();
+    
+    // Setup Three.js scene
+    setupScene();
+    
+    // Start animation loop
+    animate();
+}
+
+function setupSocketConnection() {
+    // Connect to server
+    socket = io();
+    
+    // Connection status
+    socket.on('connect', () => {
+        console.log('Connected to server:', socket.id);
+        document.getElementById('connectionStatus').textContent = 'Connected! Select a class to join.';
+        document.getElementById('connectionStatus').style.color = '#00ff00';
+    });
+    
+    socket.on('connect_error', (err) => {
+        console.error('Connection error:', err);
+        document.getElementById('connectionStatus').textContent = 'Connection failed. Retrying...';
+        document.getElementById('connectionStatus').style.color = '#ff0000';
+    });
+    
+    // Game events
+    socket.on('joined', (data) => {
+        console.log('Joined game:', data);
+        myId = data.id;
+        document.getElementById('menu').classList.add('hidden');
+        document.getElementById('connectionStatus').textContent = 'Waiting for round to start...';
+        updateGunVisibility();
+    });
+    
+    socket.on('lobbyMode', (data) => {
+        console.log('In lobby, time until start:', data.timeUntilStart);
+        document.getElementById('menu').classList.remove('hidden');
+        document.getElementById('spectatorScreen').classList.add('hidden');
+        document.getElementById('roundEndScreen').classList.add('hidden');
+        document.getElementById('ui').classList.add('hidden');
+    });
+    
+    socket.on('spectatorMode', (data) => {
+        console.log('Spectator mode:', data);
+        gameState = 'PLAYING';
+        document.getElementById('menu').classList.add('hidden');
+        document.getElementById('spectatorScreen').classList.remove('hidden');
+        document.getElementById('ui').classList.add('hidden');
+        
+        document.getElementById('spectatorInfo').innerHTML = `
+            <p style="color: #ffaa00; font-size: 18px; margin-bottom: 15px;">
+                ${data.message}
+            </p>
+            <p>Time Remaining: ${Math.ceil(data.timeRemaining)}s</p>
+        `;
+    });
+    
+    socket.on('roundStart', (data) => {
+        console.log('Round started!');
+        gameState = 'PLAYING';
+        isAlive = true;
+        myKills = 0;
+        
+        document.getElementById('menu').classList.add('hidden');
+        document.getElementById('spectatorScreen').classList.add('hidden');
+        document.getElementById('roundEndScreen').classList.add('hidden');
+        document.getElementById('ui').classList.remove('hidden');
+        
+        // Show click to play
+        document.getElementById('clickToPlay').style.display = 'block';
+        document.getElementById('blocker').style.display = 'block';
+    });
+    
+    socket.on('roundEnd', (data) => {
+        console.log('Round ended:', data);
+        gameState = 'ENDED';
+        isAlive = false;
+        
+        if (controls) controls.unlock();
+        
+        document.getElementById('ui').classList.add('hidden');
+        document.getElementById('clickToPlay').style.display = 'none';
+        document.getElementById('blocker').style.display = 'none';
+        document.getElementById('roundEndScreen').classList.remove('hidden');
+        
+        const winner = data.leaderboard[0];
+        document.getElementById('winnerAnnouncement').innerHTML = 
+            `🏆 Winner: ${winner.name} with ${winner.kills} kills!`;
+        
+        const lbDiv = document.getElementById('finalLeaderboard');
+        lbDiv.innerHTML = data.leaderboard.map((entry, i) => `
+            <div class="leaderboard-entry ${entry.alive ? 'alive' : 'dead'}">
+                <span>#${i + 1} ${entry.name}</span>
+                <span>${entry.kills} kills</span>
+                <span class="status-badge ${entry.alive ? 'alive' : 'dead'}">
+                    ${entry.alive ? 'SURVIVED' : 'ELIMINATED'}
+                </span>
+            </div>
+        `).join('');
+        
+        let countdown = 60;
+        const cdDiv = document.getElementById('nextRoundCountdown');
+        const interval = setInterval(() => {
+            countdown--;
+            cdDiv.textContent = `Next round starting in: ${countdown}`;
+            if (countdown <= 0) clearInterval(interval);
+        }, 1000);
+    });
+    
+    socket.on('worldUpdate', (state) => {
+        gameState = state.state;
+        
+        // Update timer
+        const minutes = Math.floor(state.time / 60);
+        const seconds = state.time % 60;
+        document.getElementById('timer').textContent = 
+            `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        
+        // Update entities
+        state.entities.forEach(entity => {
+            if (entity.id === myId) {
+                // Update my position
+                if (isAlive && controls && controls.isLocked) {
+                    const targetPos = new THREE.Vector3(entity.x, entity.y, entity.z);
+                    controls.getObject().position.lerp(targetPos, 0.3);
+                } else if (controls) {
+                    controls.getObject().position.set(entity.x, entity.y, entity.z);
+                }
+                
+                document.getElementById('health').textContent = `HP: ${Math.ceil(entity.hp)}`;
+                document.getElementById('ammo').textContent = `Kills: ${entity.kills}`;
+                myKills = entity.kills;
+                isAlive = entity.alive;
+                
+                if (!entity.alive && controls && controls.isLocked) {
+                    controls.unlock();
+                    document.getElementById('clickToPlay').style.display = 'none';
+                }
+                return;
+            }
+            
+            updateEntityMesh(entity);
+        });
+        
+        // Cleanup removed entities
+        for (const id in entities) {
+            if (!state.entities.find(e => e.id === id)) {
+                scene.remove(entities[id]);
+                delete entities[id];
+            }
+        }
+        
+        // Update leaderboard
+        updateLeaderboard(state.entities);
+        
+        // Update kill feed
+        if (state.killFeed) {
+            const feedDiv = document.getElementById('killFeed');
+            feedDiv.innerHTML = state.killFeed.map(k => 
+                `<div class="killMsg">${k.msg}</div>`
+            ).join('');
+        }
+    });
+    
+    socket.on('tracer', (data) => {
+        createTracer(data.origin, data.direction);
+        
+        // Spatial audio
+        if (controls) {
+            const myPos = controls.getObject().position;
+            const dist = Math.hypot(
+                data.origin.x - myPos.x,
+                data.origin.z - myPos.z
+            );
+            if (dist < 50) {
+                playSound('shoot', 0.2 * (1 - dist/50));
+            }
+        }
+    });
+    
+    socket.on('hitMarker', (data) => {
+        const ch = document.getElementById('crosshair');
+        ch.classList.add('hit');
+        if (data.kill) {
+            playSound('hit', 0.5);
+        }
+        setTimeout(() => {
+            ch.classList.remove('hit');
+        }, 150);
+    });
+    
+    socket.on('killFeed', (data) => {
+        // Handled in worldUpdate
+    });
+    
+    socket.on('error', (data) => {
+        alert(data.msg);
+    });
+}
+
+function setupScene() {
     // Scene Setup
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x87CEEB);
@@ -485,13 +700,11 @@ function init() {
     // Gun Model
     createGunModel();
 
-    // Pointer Lock Controls - CRITICAL FIX
+    // Pointer Lock Controls
     controls = new PointerLockControls(camera, document.body);
-    
-    // Add controls to scene
     scene.add(controls.getObject());
-
-    // Event Listeners for Pointer Lock
+    
+    // Pointer lock events
     controls.addEventListener('lock', () => {
         document.getElementById('clickToPlay').style.display = 'none';
         document.getElementById('blocker').style.display = 'none';
@@ -505,19 +718,16 @@ function init() {
         }
         canShoot = false;
     });
-
+    
     // Click to play handler
     document.getElementById('clickToPlay').addEventListener('click', () => {
         controls.lock();
     });
 
-    // Setup UI and Inputs
-    setupUI();
+    // Setup inputs
     setupInputs();
     
     window.addEventListener('resize', onWindowResize);
-
-    animate();
 }
 
 function createGunModel() {
@@ -654,7 +864,8 @@ function setupUI() {
             const nameInput = document.getElementById('nameInput');
             myName = nameInput.value.trim() || `Player_${Math.floor(Math.random() * 1000)}`;
             
-            SOCKET.emit('joinGame', { name: myName, classType: myClass });
+            console.log('Emitting joinGame:', { name: myName, classType: myClass });
+            socket.emit('joinGame', { name: myName, classType: myClass });
         });
     });
 }
@@ -662,7 +873,7 @@ function setupUI() {
 function setupInputs() {
     // Keyboard
     document.addEventListener('keydown', (e) => {
-        if (!controls.isLocked) return;
+        if (!controls || !controls.isLocked) return;
         
         const k = e.key.toLowerCase();
         if (k === 'w') inputs.keys.w = true;
@@ -687,16 +898,14 @@ function setupInputs() {
     
     // Mouse - Shooting
     document.addEventListener('mousedown', (e) => {
-        if (e.button === 0 && controls.isLocked && canShoot && isAlive) {
+        if (e.button === 0 && controls && controls.isLocked && canShoot && isAlive) {
             shoot();
         }
     });
     
     // Mouse movement for looking
     document.addEventListener('mousemove', (e) => {
-        if (controls.isLocked) {
-            // PointerLockControls handles camera rotation automatically
-            // We just need to track yaw for movement calculations
+        if (controls && controls.isLocked) {
             const euler = new THREE.Euler(0, 0, 0, 'YXZ');
             euler.setFromQuaternion(camera.quaternion);
             inputs.yaw = euler.y;
@@ -721,7 +930,7 @@ function shoot() {
     camera.getWorldPosition(origin);
     origin.y -= 0.2;
 
-    SOCKET.emit('shoot', {
+    socket.emit('shoot', {
         origin: { x: origin.x, y: origin.y, z: origin.z },
         direction: { x: dir.x, y: dir.y, z: dir.z }
     });
@@ -772,146 +981,6 @@ function playSound(type, volume = 0.5) {
     }
 }
 
-// --- NETWORKING ---
-SOCKET.on('joined', (data) => {
-    myId = data.id;
-    document.getElementById('menu').classList.add('hidden');
-    updateGunVisibility();
-});
-
-SOCKET.on('lobbyMode', (data) => {
-    document.getElementById('menu').classList.remove('hidden');
-    document.getElementById('spectatorScreen').classList.add('hidden');
-    document.getElementById('roundEndScreen').classList.add('hidden');
-    document.getElementById('ui').classList.add('hidden');
-});
-
-SOCKET.on('spectatorMode', (data) => {
-    gameState = 'PLAYING';
-    document.getElementById('menu').classList.add('hidden');
-    document.getElementById('spectatorScreen').classList.remove('hidden');
-    document.getElementById('ui').classList.add('hidden');
-    
-    document.getElementById('spectatorInfo').innerHTML = `
-        <p style="color: #ffaa00; font-size: 18px; margin-bottom: 15px;">
-            ${data.message}
-        </p>
-        <p>Time Remaining: ${Math.ceil(data.timeRemaining)}s</p>
-    `;
-});
-
-SOCKET.on('roundStart', (data) => {
-    gameState = 'PLAYING';
-    isAlive = true;
-    myKills = 0;
-    
-    document.getElementById('menu').classList.add('hidden');
-    document.getElementById('spectatorScreen').classList.add('hidden');
-    document.getElementById('roundEndScreen').classList.add('hidden');
-    document.getElementById('ui').classList.remove('hidden');
-    
-    // Show click to play
-    document.getElementById('clickToPlay').style.display = 'block';
-    document.getElementById('blocker').style.display = 'block';
-});
-
-SOCKET.on('roundEnd', (data) => {
-    gameState = 'ENDED';
-    isAlive = false;
-    
-    // Unlock controls
-    controls.unlock();
-    
-    document.getElementById('ui').classList.add('hidden');
-    document.getElementById('clickToPlay').style.display = 'none';
-    document.getElementById('blocker').style.display = 'none';
-    document.getElementById('roundEndScreen').classList.remove('hidden');
-    
-    // Show winner
-    const winner = data.leaderboard[0];
-    document.getElementById('winnerAnnouncement').innerHTML = 
-        `🏆 Winner: ${winner.name} with ${winner.kills} kills!`;
-    
-    // Show leaderboard (bots appear as regular players)
-    const lbDiv = document.getElementById('finalLeaderboard');
-    lbDiv.innerHTML = data.leaderboard.map((entry, i) => `
-        <div class="leaderboard-entry ${entry.alive ? 'alive' : 'dead'}">
-            <span>#${i + 1} ${entry.name}</span>
-            <span>${entry.kills} kills</span>
-            <span class="status-badge ${entry.alive ? 'alive' : 'dead'}">
-                ${entry.alive ? 'SURVIVED' : 'ELIMINATED'}
-            </span>
-        </div>
-    `).join('');
-    
-    // Countdown
-    let countdown = 60;
-    const cdDiv = document.getElementById('nextRoundCountdown');
-    const interval = setInterval(() => {
-        countdown--;
-        cdDiv.textContent = `Next round starting in: ${countdown}`;
-        if (countdown <= 0) clearInterval(interval);
-    }, 1000);
-});
-
-SOCKET.on('worldUpdate', (state) => {
-    gameState = state.state;
-    
-    // Update timer
-    const minutes = Math.floor(state.time / 60);
-    const seconds = state.time % 60;
-    document.getElementById('timer').textContent = 
-        `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-    
-    // Update entities
-    state.entities.forEach(entity => {
-        // Check if it's me
-        if (entity.id === myId) {
-            // Update my position from server (authoritative)
-            if (isAlive && controls.isLocked) {
-                // Smooth interpolation to server position
-                const targetPos = new THREE.Vector3(entity.x, entity.y, entity.z);
-                controls.getObject().position.lerp(targetPos, 0.3);
-            } else {
-                controls.getObject().position.set(entity.x, entity.y, entity.z);
-            }
-            
-            document.getElementById('health').textContent = `HP: ${Math.ceil(entity.hp)}`;
-            document.getElementById('ammo').textContent = `Kills: ${entity.kills}`;
-            myKills = entity.kills;
-            isAlive = entity.alive;
-            
-            if (!entity.alive && controls.isLocked) {
-                controls.unlock();
-                document.getElementById('clickToPlay').style.display = 'none';
-            }
-            return;
-        }
-        
-        // Update other entities
-        updateEntityMesh(entity);
-    });
-    
-    // Cleanup removed entities
-    for (const id in entities) {
-        if (!state.entities.find(e => e.id === id)) {
-            scene.remove(entities[id]);
-            delete entities[id];
-        }
-    }
-    
-    // Update leaderboard (bots appear as players)
-    updateLeaderboard(state.entities);
-    
-    // Update kill feed
-    if (state.killFeed) {
-        const feedDiv = document.getElementById('killFeed');
-        feedDiv.innerHTML = state.killFeed.map(k => 
-            `<div class="killMsg">${k.msg}</div>`
-        ).join('');
-    }
-});
-
 function updateEntityMesh(data) {
     if (!entities[data.id]) {
         const group = new THREE.Group();
@@ -939,7 +1008,7 @@ function updateEntityMesh(data) {
         gun.position.set(0.3, 1.3, 0.3);
         group.add(gun);
         
-        // Name tag (canvas texture)
+        // Name tag
         const canvas = document.createElement('canvas');
         canvas.width = 256;
         canvas.height = 64;
@@ -983,7 +1052,6 @@ function updateEntityMesh(data) {
 }
 
 function updateLeaderboard(allEntities) {
-    // Sort by alive then kills
     const sorted = [...allEntities].sort((a, b) => {
         if (a.alive && !b.alive) return -1;
         if (!a.alive && b.alive) return 1;
@@ -999,39 +1067,6 @@ function updateLeaderboard(allEntities) {
     `).join('');
 }
 
-SOCKET.on('tracer', (data) => {
-    createTracer(data.origin, data.direction);
-    
-    // Spatial audio
-    const myPos = controls.getObject().position;
-    const dist = Math.hypot(
-        data.origin.x - myPos.x,
-        data.origin.z - myPos.z
-    );
-    if (dist < 50) {
-        playSound('shoot', 0.2 * (1 - dist/50));
-    }
-});
-
-SOCKET.on('hitMarker', (data) => {
-    const ch = document.getElementById('crosshair');
-    ch.classList.add('hit');
-    if (data.kill) {
-        playSound('hit', 0.5);
-    }
-    setTimeout(() => {
-        ch.classList.remove('hit');
-    }, 150);
-});
-
-SOCKET.on('killFeed', (data) => {
-    // Handled in worldUpdate
-});
-
-SOCKET.on('error', (data) => {
-    alert(data.msg);
-});
-
 // --- MAIN LOOP ---
 function animate() {
     requestAnimationFrame(animate);
@@ -1040,9 +1075,9 @@ function animate() {
     const dt = (now - lastTime) / 1000;
     lastTime = now;
 
-    if (gameState === 'PLAYING' && isAlive && controls.isLocked) {
+    if (gameState === 'PLAYING' && isAlive && controls && controls.isLocked && socket) {
         // Send inputs to server
-        SOCKET.emit('input', {
+        socket.emit('input', {
             keys: inputs.keys,
             quaternion: { 
                 x: camera.quaternion.x, 
@@ -1064,10 +1099,13 @@ function animate() {
         }
     }
 
-    renderer.render(scene, camera);
+    if (renderer && scene && camera) {
+        renderer.render(scene, camera);
+    }
 }
 
 function onWindowResize() {
+    if (!camera || !renderer) return;
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
