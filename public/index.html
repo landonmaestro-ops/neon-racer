@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Neon Hunter: Arena</title>
+    <title>Neon Hunter: Final Fixes</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', monospace; }
         #ui { position: absolute; top: 20px; left: 20px; color: #fff; z-index: 10; pointer-events: none; text-shadow: 0 0 10px #0ff; }
@@ -38,7 +38,6 @@
         composer.addPass(new RenderPass(scene, camera));
         composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.8, 0.4, 0.85));
 
-        // Tighter Map Layout
         const buildings = [{x:60,z:60,w:40,d:40,h:50},{x:-80,z:-30,w:50,d:30,h:80},{x:30,z:-120,w:30,d:60,h:40},{x:120,z:90,w:40,d:40,h:60}];
         buildings.forEach(b => {
             const geo = new THREE.BoxGeometry(b.w, b.h, b.d);
@@ -89,22 +88,29 @@
         });
 
         socket.on('healthUpdate', (d) => {
-            const c = d.type === 'player' ? (d.id === socket.id ? playerCar : otherPlayers[d.id]) : botCars[d.id];
-            if(c) { 
-                const b = c.getObjectByName("hpBar"); 
-                b.scale.x = Math.max(0, d.health/2); 
+            const target = d.type === 'player' ? (d.id === socket.id ? playerCar : otherPlayers[d.id]) : botCars[d.id];
+            if(target) { 
+                const b = target.getObjectByName("hpBar"); 
+                b.scale.x = Math.max(0.001, d.health/2); 
                 b.material.color.setHex(d.health < 2 ? 0xffaa00 : 0x00ff00); 
             }
         });
 
-        socket.on('playerReset', (d) => { if(d.id === socket.id) { playerCar.position.set(0,0,0); speed = 0; }});
+        socket.on('playerReset', (d) => { 
+            if(d.id === socket.id && playerCar) { 
+                playerCar.position.set(d.x, 0, d.z); speed = 0; 
+                const b = playerCar.getObjectByName("hpBar");
+                b.scale.x = 1; b.material.color.setHex(0x00ff00);
+            }
+        });
 
         socket.on('currentPlayers', (ps) => {
             Object.keys(ps).forEach(id => {
                 if(id === socket.id) { 
                     playerTeam = ps[id].team; playerCar = createCar(playerTeam); scene.add(playerCar); 
-                    document.getElementById('t-info').innerHTML = `ASSIGNED TO <span class="${playerTeam}">TEAM ${playerTeam.toUpperCase()}</span>`;
-                } else { otherPlayers[id] = createCar(ps[id].team); otherPlayers[id].team = ps[id].team; scene.add(otherPlayers[id]); }
+                } else { 
+                    otherPlayers[id] = createCar(ps[id].team); otherPlayers[id].team = ps[id].team; scene.add(otherPlayers[id]); 
+                }
             });
         });
 
@@ -133,7 +139,7 @@
         function animate() {
             requestAnimationFrame(animate);
             if (playerCar) {
-                if(keys['KeyW']) speed += keys['Space'] ? 0.035 : 0.009; // Slightly buffed acceleration
+                if(keys['KeyW']) speed += keys['Space'] ? 0.035 : 0.009;
                 if(keys['KeyS']) speed -= 0.01;
                 speed *= 0.96;
                 if(keys['KeyA']) playerCar.rotation.y += 0.045;
@@ -159,11 +165,23 @@
                             p.bounces++;
                         }
                     });
+
+                    // Collision checking handled by projectile owner
                     if(p.owner === socket.id){
-                        [...Object.entries(otherPlayers), ...Object.entries(botCars)].forEach(([id, c]) => {
-                            if(p.mesh.position.distanceTo(c.position) < 2.5 && c.team !== p.team){
-                                socket.emit('hit', {id, type: id.startsWith('bot') ? 'bot' : 'player', attackerTeam: p.team, impactX: c.position.x, impactZ: c.position.z});
-                                scene.remove(p.mesh); projectiles.splice(i,1);
+                        [...Object.entries(otherPlayers), ...Object.entries(botCars), ["player", playerCar]].forEach(([id, c]) => {
+                            // Check if hitting an enemy player, bot, or even self (if it bounced back)
+                            if(p.mesh.position.distanceTo(c.position) < 2.5){
+                                let carTeam = id === "player" ? playerTeam : c.team;
+                                if(carTeam !== p.team || p.bounces > 0){
+                                    socket.emit('hit', {
+                                        id: id === "player" ? socket.id : id, 
+                                        type: (id === "player" || !id.startsWith('bot')) ? 'player' : 'bot', 
+                                        attackerTeam: p.team, 
+                                        impactX: c.position.x, 
+                                        impactZ: c.position.z
+                                    });
+                                    scene.remove(p.mesh); projectiles.splice(i,1);
+                                }
                             }
                         });
                     }
