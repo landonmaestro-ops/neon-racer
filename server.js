@@ -9,7 +9,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 let players = {};
 let bots = {};
 const TOTAL_CARS = 10;
-const MAP_SIZE = 400; // Shrunk map size
+const MAP_SIZE = 400;
 let scores = { red: 0, blue: 0 };
 let zoneTimer = 240;
 
@@ -57,11 +57,23 @@ function updateBots() {
         const id = 'bot_' + Math.random().toString(36).substr(2, 5);
         const team = (redTotal <= blueTotal) ? 'red' : 'blue';
         if (team === 'red') redTotal++; else blueTotal++;
-        bots[id] = { x: (Math.random()-0.5)*200, z: (Math.random()-0.5)*200, rot: 0, team, health: 2, speed: 0.75, lastShot: 0 };
+        
+        // 50/50 Role Split: half are "strikers" (hunt), half are "defenders" (zones)
+        const role = (i % 2 === 0) ? 'striker' : 'defender';
+        
+        bots[id] = { 
+            x: (Math.random()-0.5)*200, 
+            z: (Math.random()-0.5)*200, 
+            rot: 0, 
+            team, 
+            health: 2, 
+            speed: 0.75, 
+            lastShot: 0,
+            role: role
+        };
     }
 }
 
-// Bot AI: HUNT PRIORITY
 setInterval(() => {
     Object.keys(bots).forEach(id => {
         const bot = bots[id];
@@ -69,20 +81,20 @@ setInterval(() => {
         let closestEnemy = null;
         let minDist = Infinity;
 
-        // Find nearest enemy (Player or Bot)
-        const enemies = [...Object.entries(players), ...Object.entries(bots)].filter(([eid, e]) => e.team !== bot.team && eid !== id);
+        const enemies = [...Object.entries(players), ...Object.entries(bots)].filter(([eid, e]) => e.team !== bot.team);
         
         enemies.forEach(([eid, e]) => {
             const d = Math.sqrt((e.x - bot.x)**2 + (e.z - bot.z)**2);
             if (d < minDist) { minDist = d; closestEnemy = e; }
         });
 
-        // Priority: If enemy exists, hunt them. Otherwise, go to zone.
-        if (closestEnemy && minDist < 250) {
+        // Split AI Logic
+        if (bot.role === 'striker' && closestEnemy && minDist < 250) {
             targetPos = { x: closestEnemy.x, z: closestEnemy.z };
-            // Nitro Boost for Bots if far from target
-            bot.speed = minDist > 50 ? 1.2 : 0.75; 
+            bot.speed = minDist > 40 ? 1.3 : 0.8; // Nitro chasing
         } else {
+            // Defenders go to zone, but shoot if enemies get close
+            targetPos = zones[bot.team];
             bot.speed = 0.75;
         }
 
@@ -95,9 +107,9 @@ setInterval(() => {
         bot.x += Math.sin(bot.rot) * bot.speed;
         bot.z += Math.cos(bot.rot) * bot.speed;
 
-        // Shooting
+        // Combat
         const now = Date.now();
-        if (closestEnemy && minDist < 60 && now - bot.lastShot > 2000) {
+        if (closestEnemy && minDist < 70 && now - bot.lastShot > 2500) {
             io.emit('projectileSpawned', { x: bot.x, z: bot.z, rot: Math.atan2(closestEnemy.x - bot.x, closestEnemy.z - bot.z), owner: id, team: bot.team });
             bot.lastShot = now;
         }
@@ -107,9 +119,8 @@ setInterval(() => {
 
 setInterval(() => {
     let rIn = 0, bIn = 0;
-    const all = [...Object.values(players), ...Object.values(bots)];
-    all.forEach(c => {
-        const z = zones[c.team === 'red' ? 'red' : 'blue'];
+    [...Object.values(players), ...Object.values(bots)].forEach(c => {
+        const z = zones[c.team];
         if (Math.sqrt((c.x-z.x)**2 + (c.z-z.z)**2) < 15) {
             if (c.team === 'red') rIn++; else bIn++;
         }
@@ -140,9 +151,12 @@ io.on('connection', (socket) => {
         if (t && t.team !== data.attackerTeam) {
             t.health -= 1;
             if (t.health <= 0) {
-                t.x = (Math.random()-0.5)*50; t.z = (Math.random()-0.5)*50; t.health = 2;
+                // Fixed Stuck Respawn: Move away from center slightly so they don't stack
+                t.x = (Math.random()-0.5) * 40; 
+                t.z = (Math.random()-0.5) * 40; 
+                t.health = 2;
                 io.emit('explosion', { x: data.impactX, z: data.impactZ, color: t.team === 'red' ? 0xff0000 : 0x0066ff });
-                if (data.type === 'player') io.emit('playerReset', { id: data.id });
+                if (data.type === 'player') io.emit('playerReset', { id: data.id, x: t.x, z: t.z });
             }
             io.emit('healthUpdate', { id: data.id, health: t.health, type: data.type });
         }
@@ -151,4 +165,4 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => { delete players[socket.id]; updateBots(); io.emit('playerDisconnected', socket.id); });
 });
 
-http.listen(3000, () => console.log('BATTLE ARENA ONLINE'));
+http.listen(3000, () => console.log('BATTLE READY'));
