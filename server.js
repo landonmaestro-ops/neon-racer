@@ -10,50 +10,73 @@ let players = {};
 let bots = {};
 const TOTAL_CARS = 10;
 
+// Zones logic
+let zones = {
+    red: { x: 200, z: 200 },
+    blue: { x: -200, z: -200 }
+};
+
+function rotateZones() {
+    zones.red = { x: (Math.random() - 0.5) * 800, z: (Math.random() - 0.5) * 800 };
+    zones.blue = { x: (Math.random() - 0.5) * 800, z: (Math.random() - 0.5) * 800 };
+    io.emit('zonesUpdate', zones);
+}
+setInterval(rotateZones, 4 * 60 * 1000); // 4 minutes
+
 function updateBots() {
     const playerCount = Object.keys(players).length;
     const botsNeeded = Math.max(0, TOTAL_CARS - playerCount);
     
-    // Remove extra bots if players joined
     while (Object.keys(bots).length > botsNeeded) {
-        const firstBotId = Object.keys(bots)[0];
-        delete bots[firstBotId];
-        io.emit('botRemoved', firstBotId);
+        const id = Object.keys(bots)[0];
+        delete bots[id];
+        io.emit('botRemoved', id);
     }
 
-    // Add bots until we hit the target
     while (Object.keys(bots).length < botsNeeded) {
         const id = 'bot_' + Math.random().toString(36).substr(2, 9);
-        const neonColors = [0xff00ff, 0x00ff00, 0xffff00, 0xff0000, 0x00ffff, 0xffa500];
+        const team = Math.random() > 0.5 ? 'red' : 'blue';
         bots[id] = {
             x: (Math.random() - 0.5) * 800,
             z: (Math.random() - 0.5) * 800,
             rot: Math.random() * Math.PI * 2,
-            color: neonColors[Math.floor(Math.random() * neonColors.length)],
-            speed: 0.15 + Math.random() * 0.25
+            team: team,
+            speed: 0.2 + Math.random() * 0.2
         };
     }
 }
 
-// Bot Brains: Move and Turn
+// Bot AI: Move toward respective zones
 setInterval(() => {
     Object.keys(bots).forEach(id => {
         const bot = bots[id];
+        const target = zones[bot.team];
+        
+        // Calculate angle to zone
+        const dx = target.x - bot.x;
+        const dz = target.z - bot.z;
+        const targetRot = Math.atan2(dx, dz);
+        
+        // Slowly rotate toward target
+        let diff = targetRot - bot.rot;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        bot.rot += diff * 0.05;
+
         bot.x += Math.sin(bot.rot) * bot.speed;
         bot.z += Math.cos(bot.rot) * bot.speed;
-        if (Math.random() > 0.98) bot.rot += (Math.random() - 0.5) * 2;
-        if (Math.abs(bot.x) > 450 || Math.abs(bot.z) > 450) bot.rot += Math.PI; // Bounce off edges
     });
     io.emit('botUpdate', bots);
 }, 100);
 
 io.on('connection', (socket) => {
-    players[socket.id] = { x: 0, z: 0, rot: 0 };
+    const team = Math.random() > 0.5 ? 'red' : 'blue';
+    players[socket.id] = { x: 0, z: 0, rot: 0, team: team };
     updateBots();
     
     socket.emit('currentPlayers', players);
-    socket.emit('botUpdate', bots);
-    socket.broadcast.emit('newPlayer', { id: socket.id });
+    socket.emit('zonesUpdate', zones);
+    socket.broadcast.emit('newPlayer', { id: socket.id, team: team });
 
     socket.on('playerMovement', (data) => {
         if (players[socket.id]) {
@@ -64,9 +87,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('chatMessage', (msg) => {
-        io.emit('chatMessage', { id: socket.id, msg: msg });
-    });
+    socket.on('chatMessage', (msg) => io.emit('chatMessage', { id: socket.id, msg }));
 
     socket.on('disconnect', () => {
         delete players[socket.id];
@@ -76,4 +97,4 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-http.listen(PORT, () => console.log('SERVER ONLINE'));
+http.listen(PORT, () => console.log('BATTLE SERVER ONLINE'));
