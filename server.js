@@ -10,17 +10,7 @@ let players = {};
 let bots = {};
 const TOTAL_CARS = 10;
 let scores = { red: 0, blue: 0 };
-
-// Countdown logic
-let zoneTimer = 240; // 4 minutes in seconds
-setInterval(() => {
-    zoneTimer--;
-    if (zoneTimer <= 0) {
-        rotateZones();
-        zoneTimer = 240;
-    }
-    io.emit('timerUpdate', zoneTimer);
-}, 1000);
+let zoneTimer = 240;
 
 const buildings = [
     { x: 100, z: 100, w: 40, d: 40, h: 50 },
@@ -33,87 +23,57 @@ let zones = { red: { x: 350, z: 0 }, blue: { x: -350, z: 0 } };
 
 function rotateZones() {
     const distance = 350;
-    let rx, rz, bx, bz, angle;
-    let foundSafeSpot = false;
-    let attempts = 0;
-    while (!foundSafeSpot && attempts < 100) {
-        angle = Math.random() * Math.PI * 2;
-        rx = Math.cos(angle) * distance;
-        rz = Math.sin(angle) * distance;
-        bx = -Math.cos(angle) * distance;
-        bz = -Math.sin(angle) * distance;
-        if (!isOverBuilding(rx, rz) && !isOverBuilding(bx, bz)) foundSafeSpot = true;
-        attempts++;
+    let rx, rz, bx, bz, found = false;
+    while (!found) {
+        let a = Math.random() * Math.PI * 2;
+        rx = Math.cos(a) * distance; rz = Math.sin(a) * distance;
+        bx = -Math.cos(a) * distance; bz = -Math.sin(a) * distance;
+        if (!isOverBuilding(rx, rz) && !isOverBuilding(bx, bz)) found = true;
     }
-    zones.red = { x: rx, z: rz };
-    zones.blue = { x: bx, z: bz };
+    zones.red = { x: rx, z: rz }; zones.blue = { x: bx, z: bz };
     io.emit('zonesUpdate', zones);
 }
 
 function isOverBuilding(x, z) {
-    return buildings.some(b => {
-        return x > b.x - (b.w/2 + 20) && x < b.x + (b.w/2 + 20) &&
-               z > b.z - (b.d/2 + 20) && z < b.z + (b.d/2 + 20);
-    });
+    return buildings.some(b => x > b.x-b.w/2-20 && x < b.x+b.w/2+20 && z > b.z-b.d/2-20 && z < b.z+b.d/2+20);
 }
 
-// Scoring Logic
 setInterval(() => {
-    let redInZone = 0, blueInZone = 0;
-    const allCars = [...Object.values(players), ...Object.values(bots)];
-    allCars.forEach(car => {
-        const targetZone = zones[car.team];
-        const dist = Math.sqrt((car.x - targetZone.x)**2 + (car.z - targetZone.z)**2);
-        if (dist < 15) {
-            if (car.team === 'red') redInZone++; else blueInZone++;
-        }
-    });
-    if (redInZone > blueInZone) scores.red++;
-    else if (blueInZone > redInZone) scores.blue++;
-    io.emit('scoreUpdate', scores);
+    zoneTimer--;
+    if (zoneTimer <= 0) { rotateZones(); zoneTimer = 240; }
+    io.emit('timerUpdate', zoneTimer);
 }, 1000);
 
+// Scoring & Team Balancing
 function updateBots() {
-    const playerCount = Object.keys(players).length;
-    const botsNeeded = Math.max(0, TOTAL_CARS - playerCount);
-    const currentBotIds = Object.keys(bots);
-    if (currentBotIds.length > botsNeeded) {
-        for (let i = 0; i < (currentBotIds.length - botsNeeded); i++) {
-            const id = currentBotIds[i];
-            delete bots[id]; io.emit('botRemoved', id);
-        }
-    }
-    while (Object.keys(bots).length < botsNeeded) {
-        const id = 'bot_' + Math.random().toString(36).substr(2, 9);
-        bots[id] = { x: (Math.random() - 0.5) * 600, z: (Math.random() - 0.5) * 600, rot: Math.random() * Math.PI * 2, team: Math.random() > 0.5 ? 'red' : 'blue', speed: 0.7, health: 2 };
+    const pIds = Object.keys(players);
+    const botsNeeded = Math.max(0, TOTAL_CARS - pIds.length);
+    
+    // Clear bots to re-balance teams
+    const bIds = Object.keys(bots);
+    bIds.forEach(id => { delete bots[id]; io.emit('botRemoved', id); });
+
+    let redCount = pIds.filter(id => players[id].team === 'red').length;
+    let blueCount = pIds.filter(id => players[id].team === 'blue').length;
+
+    for (let i = 0; i < botsNeeded; i++) {
+        const id = 'bot_' + Math.random().toString(36).substr(2, 5);
+        const team = (redCount <= blueCount) ? 'red' : 'blue';
+        if (team === 'red') redCount++; else blueCount++;
+        
+        bots[id] = { x: (Math.random()-0.5)*400, z: (Math.random()-0.5)*400, rot: 0, team, health: 2, speed: 0.7 };
     }
 }
 
-// Bot AI & Collision Reset
-setInterval(() => {
-    Object.keys(bots).forEach(id => {
-        const bot = bots[id];
-        const target = zones[bot.team];
-        if (!target) return;
-        const dx = target.x - bot.x, dz = target.z - bot.z;
-        const targetRot = Math.atan2(dx, dz);
-        let diff = targetRot - bot.rot;
-        while (diff < -Math.PI) diff += Math.PI * 2;
-        while (diff > Math.PI) diff -= Math.PI * 2;
-        bot.rot += diff * 0.1;
-        bot.x += Math.sin(bot.rot) * bot.speed;
-        bot.z += Math.cos(bot.rot) * bot.speed;
-    });
-    io.emit('botUpdate', bots);
-}, 50);
-
 io.on('connection', (socket) => {
-    const team = Math.random() > 0.5 ? 'red' : 'blue';
-    players[socket.id] = { x: 0, z: 0, rot: 0, team: team, health: 2 };
+    const pCount = Object.keys(players).length;
+    const team = (pCount % 2 === 0) ? 'red' : 'blue';
+    players[socket.id] = { x: 0, z: 0, rot: 0, team, health: 2 };
     updateBots();
+    
     socket.emit('currentPlayers', players);
     socket.emit('zonesUpdate', zones);
-    
+
     socket.on('playerMovement', (data) => {
         if (players[socket.id]) {
             players[socket.id].x = data.x; players[socket.id].z = data.z; players[socket.id].rot = data.rot;
@@ -121,26 +81,22 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('shoot', (proj) => {
-        socket.broadcast.emit('projectileSpawned', proj);
-    });
+    socket.on('shoot', (p) => socket.broadcast.emit('projectileSpawned', p));
 
     socket.on('hit', (data) => {
-        let target;
-        if (data.type === 'player') target = players[data.id];
-        else target = bots[data.id];
-
-        if (target && target.team !== data.attackerTeam) {
-            target.health -= 1;
-            if (target.health <= 0) {
-                target.x = 0; target.z = 0; target.health = 2;
+        let t = data.type === 'player' ? players[data.id] : bots[data.id];
+        if (t && t.team !== data.attackerTeam) {
+            t.health -= 1;
+            if (t.health <= 0) {
+                t.x = 0; t.z = 0; t.health = 2;
+                io.emit('explosion', { x: data.impactX, z: data.impactZ, color: t.team === 'red' ? 0xff0000 : 0x0066ff });
                 if (data.type === 'player') io.emit('playerReset', { id: data.id });
             }
-            io.emit('healthUpdate', { id: data.id, health: target.health, type: data.type });
+            io.emit('healthUpdate', { id: data.id, health: t.health, type: data.type });
         }
     });
 
     socket.on('disconnect', () => { delete players[socket.id]; updateBots(); io.emit('playerDisconnected', socket.id); });
 });
 
-http.listen(3000, () => console.log('SERVER ONLINE'));
+http.listen(3000, () => console.log('SERVER READY'));
