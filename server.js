@@ -10,19 +10,21 @@ let players = {};
 let bots = {};
 const TOTAL_CARS = 10;
 
-// Define your buildings here so zones avoid them {x, z, radius}
+// Centralized Building Data
 const buildings = [
-    { x: 100, z: 100, r: 30 },
-    { x: -150, z: -50, r: 40 },
-    { x: 0, z: 250, r: 35 }
+    { x: 100, z: 100, w: 40, d: 40, h: 50 },
+    { x: -150, z: -50, w: 50, d: 30, h: 80 },
+    { x: 50, z: -200, w: 30, d: 60, h: 40 },
+    { x: 200, z: 150, w: 40, d: 40, h: 60 }
 ];
 
 let zones = { red: { x: 350, z: 0 }, blue: { x: -350, z: 0 } };
 
 function isOverBuilding(x, z) {
     return buildings.some(b => {
-        const dist = Math.sqrt((x - b.x) ** 2 + (z - b.z) ** 2);
-        return dist < (b.r + 20); // 20 is buffer for zone size
+        // Simple bounding box check with a margin of 20 for the zone size
+        return x > b.x - (b.w/2 + 20) && x < b.x + (b.w/2 + 20) &&
+               z > b.z - (b.d/2 + 20) && z < b.z + (b.d/2 + 20);
     });
 }
 
@@ -57,7 +59,6 @@ function updateBots() {
     const playerCount = Object.keys(players).length;
     const botsNeeded = Math.max(0, TOTAL_CARS - playerCount);
     
-    // Remove excess bots
     const currentBotIds = Object.keys(bots);
     if (currentBotIds.length > botsNeeded) {
         for (let i = 0; i < (currentBotIds.length - botsNeeded); i++) {
@@ -67,12 +68,11 @@ function updateBots() {
         }
     }
 
-    // Add missing bots
     while (Object.keys(bots).length < botsNeeded) {
         const id = 'bot_' + Math.random().toString(36).substr(2, 9);
         bots[id] = {
-            x: (Math.random() - 0.5) * 600,
-            z: (Math.random() - 0.5) * 600,
+            x: (Math.random() - 0.5) * 800,
+            z: (Math.random() - 0.5) * 800,
             rot: Math.random() * Math.PI * 2,
             team: Math.random() > 0.5 ? 'red' : 'blue',
             speed: 0.4 + (Math.random() * 0.2)
@@ -80,17 +80,14 @@ function updateBots() {
     }
 }
 
-// Bot AI Loop
 setInterval(() => {
     Object.keys(bots).forEach(id => {
         const bot = bots[id];
         const target = zones[bot.team];
         if (!target) return;
-
         const dx = target.x - bot.x;
         const dz = target.z - bot.z;
         const dist = Math.sqrt(dx*dx + dz*dz);
-        
         if (dist > 15) {
             const targetRot = Math.atan2(dx, dz);
             let diff = targetRot - bot.rot;
@@ -108,26 +105,15 @@ io.on('connection', (socket) => {
     const team = Math.random() > 0.5 ? 'red' : 'blue';
     players[socket.id] = { x: 0, z: 0, rot: 0, team: team };
     updateBots();
-    
     socket.emit('currentPlayers', players);
     socket.emit('zonesUpdate', zones);
-    socket.broadcast.emit('newPlayer', { id: socket.id, team: team });
-
     socket.on('playerMovement', (data) => {
         if (players[socket.id]) {
-            players[socket.id].x = data.x; 
-            players[socket.id].z = data.z; 
-            players[socket.id].rot = data.rot;
+            players[socket.id].x = data.x; players[socket.id].z = data.z; players[socket.id].rot = data.rot;
             socket.broadcast.emit('playerMoved', { id: socket.id, info: players[socket.id] });
         }
     });
-
-    socket.on('disconnect', () => { 
-        delete players[socket.id]; 
-        updateBots(); 
-        io.emit('playerDisconnected', socket.id); 
-    });
+    socket.on('disconnect', () => { delete players[socket.id]; updateBots(); io.emit('playerDisconnected', socket.id); });
 });
 
-const PORT = process.env.PORT || 3000;
-http.listen(PORT, () => console.log('SERVER ONLINE: 10 CARS ACTIVE'));
+http.listen(3000, () => console.log('SERVER ONLINE'));
