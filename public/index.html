@@ -33,6 +33,28 @@
         composer.addPass(new RenderPass(scene, camera));
         composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85));
 
+        // Building Generation (Must match server coordinates)
+        const buildings = [
+            { x: 100, z: 100, w: 40, d: 40, h: 50 },
+            { x: -150, z: -50, w: 50, d: 30, h: 80 },
+            { x: 50, z: -200, w: 30, d: 60, h: 40 },
+            { x: 200, z: 150, w: 40, d: 40, h: 60 }
+        ];
+
+        buildings.forEach(b => {
+            const geometry = new THREE.BoxGeometry(b.w, b.h, b.d);
+            const material = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.1 });
+            const building = new THREE.Mesh(geometry, material);
+            building.position.set(b.x, b.h / 2, b.z);
+            scene.add(building);
+
+            // Add neon edges
+            const edges = new THREE.EdgesGeometry(geometry);
+            const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x00ffff }));
+            line.position.copy(building.position);
+            scene.add(line);
+        });
+
         const mapCanvas = document.getElementById('minimap');
         const mapCtx = mapCanvas.getContext('2d');
 
@@ -49,18 +71,12 @@
         function createCar(team) {
             const color = (team === 'red') ? 0xff0000 : 0x0066ff;
             const carGroup = new THREE.Group();
-
-            // Body
             const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 3), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.8 }));
             body.position.y = 0.5;
             carGroup.add(body);
-
-            // Cabin
             const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 1.2), new THREE.MeshStandardMaterial({ color: 0x111111 }));
             cabin.position.set(0, 0.9, -0.2);
             carGroup.add(cabin);
-
-            // Wheels
             const wheelGeom = new THREE.CylinderGeometry(0.35, 0.35, 0.3, 12);
             wheelGeom.rotateZ(Math.PI / 2);
             const wheelMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
@@ -113,11 +129,9 @@
                 if (keys['KeyW']) speed += keys['Space'] ? 0.015 : 0.007;
                 if (keys['KeyS']) speed -= 0.007;
                 speed *= 0.95;
-
                 if (keys['KeyA']) playerCar.rotation.y += 0.04;
                 if (keys['KeyD']) playerCar.rotation.y -= 0.04;
 
-                // Drift Physics: momentum (driftAngle) lags behind car rotation
                 driftAngle += (playerCar.rotation.y - driftAngle) * 0.12;
                 playerCar.position.x += Math.sin(driftAngle) * speed;
                 playerCar.position.z += Math.cos(driftAngle) * speed;
@@ -127,11 +141,14 @@
                 const offset = new THREE.Vector3(0, 8, -15).applyMatrix4(playerCar.matrixWorld);
                 camera.position.lerp(offset, 0.1); camera.lookAt(playerCar.position);
 
-                // Minimap
                 mapCtx.clearRect(0,0,200,200);
                 const toMap = (val) => (val / 1000) * 200 + 100;
                 mapCtx.strokeStyle = '#ff0000'; mapCtx.strokeRect(toMap(currentZones.red.x)-5, toMap(currentZones.red.z)-5, 10, 10);
                 mapCtx.strokeStyle = '#0000ff'; mapCtx.strokeRect(toMap(currentZones.blue.x)-5, toMap(currentZones.blue.z)-5, 10, 10);
+                
+                // Draw buildings on map
+                mapCtx.fillStyle = '#444';
+                buildings.forEach(b => mapCtx.fillRect(toMap(b.x)-b.w/10, toMap(b.z)-b.d/10, b.w/5, b.d/5));
 
                 const drawDot = (x, z, c) => {
                     mapCtx.fillStyle = c; mapCtx.beginPath(); mapCtx.arc(toMap(x), toMap(z), 3, 0, Math.PI*2); mapCtx.fill();
