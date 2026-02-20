@@ -1,25 +1,17 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Neon Racer: Zone Control</title>
+    <title>Neon Racer: Zone Battle</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: monospace; }
         #ui { position: absolute; top: 20px; left: 20px; color: #fff; z-index: 10; pointer-events: none; }
-        #minimap { position: absolute; top: 20px; right: 20px; width: 200px; height: 200px; background: rgba(0,0,0,0.8); border: 2px solid #fff; border-radius: 10px; z-index: 30; }
-        #chat-container { position: absolute; bottom: 20px; left: 20px; width: 300px; background: rgba(0,0,0,0.8); border: 2px solid #fff; padding: 10px; z-index: 20; }
-        #messages { height: 100px; overflow-y: auto; color: #fff; margin-bottom: 10px; font-size: 12px; }
-        #chat-input { width: 92%; background: #000; border: 1px solid #fff; color: #fff; padding: 5px; outline: none; }
-        .red-text { color: #ff4444; } .blue-text { color: #4444ff; }
+        #minimap { position: absolute; top: 20px; right: 20px; width: 200px; height: 200px; background: rgba(0,0,0,0.8); border: 2px solid #fff; border-radius: 5px; z-index: 30; }
+        .red { color: #ff0000; } .blue { color: #0088ff; }
     </style>
 </head>
 <body>
-
-    <div id="ui">
-        <h1>NEON RACER: TEAMS</h1>
-        <p id="team-info">ASSIGNING TEAM...</p>
-    </div>
+    <div id="ui"><h1>NEON RACER</h1><p id="t-info">SYNCING...</p></div>
     <canvas id="minimap"></canvas>
-    <div id="chat-container"><div id="messages"></div><input type="text" id="chat-input" placeholder="Type to chat..."></div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script type="importmap">{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }</script>
@@ -43,50 +35,39 @@
 
         const mapCanvas = document.getElementById('minimap');
         const mapCtx = mapCanvas.getContext('2d');
-        const obstacles = [];
 
-        // Environment & Obstacles
-        scene.add(new THREE.GridHelper(1000, 50, 0x333333, 0x111111));
-        for(let i = 0; i < 40; i++) {
-            const h = 100; const w = 15;
-            const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0x555555 }));
-            const x = (Math.random()-0.5)*800; const z = (Math.random()-0.5)*800;
-            b.position.set(x, h/2, z); scene.add(b);
-            obstacles.push({ x, z, size: w/2 + 1.5 });
-        }
-
-        // Zone Visuals (Glow Squares)
-        const zoneRed = new THREE.Mesh(new THREE.PlaneGeometry(15, 15), new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5, side: THREE.DoubleSide }));
-        const zoneBlue = new THREE.Mesh(new THREE.PlaneGeometry(15, 15), new THREE.MeshBasicMaterial({ color: 0x0000ff, transparent: true, opacity: 0.5, side: THREE.DoubleSide }));
-        zoneRed.rotation.x = zoneBlue.rotation.x = Math.PI / 2;
-        zoneRed.position.y = zoneBlue.position.y = 0.1;
+        // Zones (Now using Boxes so they aren't flat)
+        const zoneRed = new THREE.Mesh(new THREE.BoxGeometry(25, 1, 25), new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.4 }));
+        const zoneBlue = new THREE.Mesh(new THREE.BoxGeometry(25, 1, 25), new THREE.MeshBasicMaterial({ color: 0x0000ff, transparent: true, opacity: 0.4 }));
         scene.add(zoneRed, zoneBlue);
+
+        scene.add(new THREE.GridHelper(1000, 50, 0x444444, 0x222222));
 
         let playerCar, playerTeam;
         const otherPlayers = {}, botCars = {};
+        let currentZones = { red: {x:0, z:0}, blue: {x:0, z:0} };
 
         function createCar(team) {
-            const color = (team === 'red') ? 0xff0000 : 0x0000ff;
+            const color = (team === 'red') ? 0xff0000 : 0x0066ff;
             const g = new THREE.Group();
             const b = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.6, 3), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 2 }));
             b.position.y = 0.3; g.add(b); return g;
         }
 
         socket.on('zonesUpdate', (z) => {
-            zoneRed.position.x = z.red.x; zoneRed.position.z = z.red.z;
-            zoneBlue.position.x = z.blue.x; zoneBlue.position.z = z.blue.z;
+            currentZones = z;
+            zoneRed.position.set(z.red.x, 0.1, z.red.z);
+            zoneBlue.position.set(z.blue.x, 0.1, z.blue.z);
         });
 
         socket.on('currentPlayers', (ps) => {
             Object.keys(ps).forEach(id => {
                 if(id === socket.id) {
                     playerTeam = ps[id].team;
-                    document.getElementById('team-info').innerHTML = `TEAM: <span class="${playerTeam}-text">${playerTeam.toUpperCase()}</span>`;
+                    document.getElementById('t-info').innerHTML = `TEAM: <span class="${playerTeam}">${playerTeam.toUpperCase()}</span>`;
                     playerCar = createCar(playerTeam); scene.add(playerCar);
                 } else {
-                    otherPlayers[id] = createCar(ps[id].team);
-                    otherPlayers[id].team = ps[id].team;
-                    scene.add(otherPlayers[id]);
+                    otherPlayers[id] = createCar(ps[id].team); otherPlayers[id].team = ps[id].team; scene.add(otherPlayers[id]);
                 }
             });
         });
@@ -110,42 +91,31 @@
         function animate() {
             requestAnimationFrame(animate);
             if (playerCar) {
-                const isNitro = keys['Space'];
-                if (keys['KeyW']) speed += isNitro ? 0.018 : 0.006;
+                if (keys['KeyW']) speed += keys['Space'] ? 0.015 : 0.006;
                 if (keys['KeyS']) speed -= 0.006;
-                speed *= 0.95;
-
-                const nextX = playerCar.position.x + Math.sin(playerCar.rotation.y) * speed;
-                const nextZ = playerCar.position.z + Math.cos(playerCar.rotation.y) * speed;
-                
-                let hit = false;
-                for(let obs of obstacles) {
-                    if(Math.sqrt((nextX - obs.x)**2 + (nextZ - obs.z)**2) < obs.size) { hit = true; break; }
-                }
-
-                if(!hit) playerCar.translateZ(speed); else speed = -speed * 0.5;
-
+                speed *= 0.95; playerCar.translateZ(speed);
                 if (keys['KeyA']) playerCar.rotation.y += 0.04;
                 if (keys['KeyD']) playerCar.rotation.y -= 0.04;
 
                 socket.emit('playerMovement', { x: playerCar.position.x, z: playerCar.position.z, rot: playerCar.rotation.y });
 
-                const offset = new THREE.Vector3(0, 6, -12).applyMatrix4(playerCar.matrixWorld);
+                const offset = new THREE.Vector3(0, 8, -15).applyMatrix4(playerCar.matrixWorld);
                 camera.position.lerp(offset, 0.1); camera.lookAt(playerCar.position);
 
                 // Minimap
                 mapCtx.clearRect(0,0,200,200);
-                const drawDot = (x, z, color) => {
-                    const px = (x / 1000) * 200 + 100; const pz = (z / 1000) * 200 + 100;
-                    mapCtx.fillStyle = color; mapCtx.beginPath(); mapCtx.arc(px, pz, 4, 0, Math.PI*2); mapCtx.fill();
-                };
-                // Draw Zones on map
-                mapCtx.fillStyle = 'rgba(255,0,0,0.3)'; mapCtx.fillRect((zoneRed.position.x/1000)*200+95, (zoneRed.position.z/1000)*200+95, 10, 10);
-                mapCtx.fillStyle = 'rgba(0,0,255,0.3)'; mapCtx.fillRect((zoneBlue.position.x/1000)*200+95, (zoneBlue.position.z/1000)*200+95, 10, 10);
+                const toMap = (val) => (val / 1000) * 200 + 100;
                 
-                drawDot(playerCar.position.x, playerCar.position.z, playerTeam === 'red' ? '#ff0000' : '#0000ff');
-                Object.values(otherPlayers).forEach(p => drawDot(p.position.x, p.position.z, p.team === 'red' ? '#ff0000' : '#0000ff'));
-                Object.values(botCars).forEach(b => drawDot(b.position.x, b.position.z, b.team === 'red' ? '#ff0000' : '#0000ff'));
+                // Draw Zones on Map
+                mapCtx.strokeStyle = '#ff0000'; mapCtx.strokeRect(toMap(currentZones.red.x)-5, toMap(currentZones.red.z)-5, 10, 10);
+                mapCtx.strokeStyle = '#0000ff'; mapCtx.strokeRect(toMap(currentZones.blue.x)-5, toMap(currentZones.blue.z)-5, 10, 10);
+
+                const drawDot = (x, z, c) => {
+                    mapCtx.fillStyle = c; mapCtx.beginPath(); mapCtx.arc(toMap(x), toMap(z), 3, 0, Math.PI*2); mapCtx.fill();
+                };
+                drawDot(playerCar.position.x, playerCar.position.z, playerTeam === 'red' ? '#f00' : '#00f');
+                Object.values(otherPlayers).forEach(p => drawDot(p.position.x, p.position.z, p.team === 'red' ? '#f00' : '#00f'));
+                Object.values(botCars).forEach(b => drawDot(b.position.x, b.position.z, b.team === 'red' ? '#f00' : '#00f'));
             }
             composer.render();
         }
