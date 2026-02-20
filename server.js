@@ -10,35 +10,72 @@ let players = {};
 let bots = {};
 const TOTAL_CARS = 10;
 
+// Define your buildings here so zones avoid them {x, z, radius}
+const buildings = [
+    { x: 100, z: 100, r: 30 },
+    { x: -150, z: -50, r: 40 },
+    { x: 0, z: 250, r: 35 }
+];
+
 let zones = { red: { x: 350, z: 0 }, blue: { x: -350, z: 0 } };
 
-// Equidistant Zone Math
+function isOverBuilding(x, z) {
+    return buildings.some(b => {
+        const dist = Math.sqrt((x - b.x) ** 2 + (z - b.z) ** 2);
+        return dist < (b.r + 20); // 20 is buffer for zone size
+    });
+}
+
 function rotateZones() {
-    const angle = Math.random() * Math.PI * 2;
-    const distance = 350; // Exact distance from center
-    zones.red = { x: Math.cos(angle) * distance, z: Math.sin(angle) * distance };
-    zones.blue = { x: -Math.cos(angle) * distance, z: -Math.sin(angle) * distance };
+    const distance = 350;
+    let rx, rz, bx, bz, angle;
+    let foundSafeSpot = false;
+    let attempts = 0;
+
+    while (!foundSafeSpot && attempts < 100) {
+        angle = Math.random() * Math.PI * 2;
+        rx = Math.cos(angle) * distance;
+        rz = Math.sin(angle) * distance;
+        bx = -Math.cos(angle) * distance;
+        bz = -Math.sin(angle) * distance;
+
+        if (!isOverBuilding(rx, rz) && !isOverBuilding(bx, bz)) {
+            foundSafeSpot = true;
+        }
+        attempts++;
+    }
+
+    zones.red = { x: rx, z: rz };
+    zones.blue = { x: bx, z: bz };
     io.emit('zonesUpdate', zones);
 }
-setInterval(rotateZones, 4 * 60 * 1000); // 4 minutes
-setInterval(() => { io.emit('zonesUpdate', zones); }, 1000); // Heartbeat
+
+setInterval(rotateZones, 4 * 60 * 1000); 
+setInterval(() => { io.emit('zonesUpdate', zones); }, 1000);
 
 function updateBots() {
     const playerCount = Object.keys(players).length;
     const botsNeeded = Math.max(0, TOTAL_CARS - playerCount);
-    while (Object.keys(bots).length > botsNeeded) {
-        const id = Object.keys(bots)[0];
-        delete bots[id]; io.emit('botRemoved', id);
+    
+    // Remove excess bots
+    const currentBotIds = Object.keys(bots);
+    if (currentBotIds.length > botsNeeded) {
+        for (let i = 0; i < (currentBotIds.length - botsNeeded); i++) {
+            const id = currentBotIds[i];
+            delete bots[id];
+            io.emit('botRemoved', id);
+        }
     }
+
+    // Add missing bots
     while (Object.keys(bots).length < botsNeeded) {
         const id = 'bot_' + Math.random().toString(36).substr(2, 9);
-        const team = Math.random() > 0.5 ? 'red' : 'blue';
         bots[id] = {
             x: (Math.random() - 0.5) * 600,
             z: (Math.random() - 0.5) * 600,
             rot: Math.random() * Math.PI * 2,
-            team: team,
-            speed: 0.4 + (Math.random() * 0.2) // Bots are faster now too
+            team: Math.random() > 0.5 ? 'red' : 'blue',
+            speed: 0.4 + (Math.random() * 0.2)
         };
     }
 }
@@ -59,7 +96,7 @@ setInterval(() => {
             let diff = targetRot - bot.rot;
             while (diff < -Math.PI) diff += Math.PI * 2;
             while (diff > Math.PI) diff -= Math.PI * 2;
-            bot.rot += diff * 0.1; // Turn towards zone
+            bot.rot += diff * 0.1;
             bot.x += Math.sin(bot.rot) * bot.speed;
             bot.z += Math.cos(bot.rot) * bot.speed;
         }
@@ -78,14 +115,19 @@ io.on('connection', (socket) => {
 
     socket.on('playerMovement', (data) => {
         if (players[socket.id]) {
-            players[socket.id].x = data.x; players[socket.id].z = data.z; players[socket.id].rot = data.rot;
+            players[socket.id].x = data.x; 
+            players[socket.id].z = data.z; 
+            players[socket.id].rot = data.rot;
             socket.broadcast.emit('playerMoved', { id: socket.id, info: players[socket.id] });
         }
     });
 
-    socket.on('chatMessage', (msg) => io.emit('chatMessage', { id: socket.id, msg }));
-    socket.on('disconnect', () => { delete players[socket.id]; updateBots(); io.emit('playerDisconnected', socket.id); });
+    socket.on('disconnect', () => { 
+        delete players[socket.id]; 
+        updateBots(); 
+        io.emit('playerDisconnected', socket.id); 
+    });
 });
 
 const PORT = process.env.PORT || 3000;
-http.listen(PORT, () => console.log('SERVER REPAIRED AND ONLINE'));
+http.listen(PORT, () => console.log('SERVER ONLINE: 10 CARS ACTIVE'));
