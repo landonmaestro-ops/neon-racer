@@ -84,7 +84,7 @@
         socket.on('projectileSpawned', (p) => {
             const m = new THREE.Mesh(new THREE.SphereGeometry(0.3), new THREE.MeshBasicMaterial({color:0xffffff}));
             m.position.set(p.x, 0.5, p.z); scene.add(m);
-            projectiles.push({ mesh: m, vx: Math.sin(p.rot)*2, vz: Math.cos(p.rot)*2, owner: p.owner, team: p.team });
+            projectiles.push({ mesh: m, vx: Math.sin(p.rot)*2, vz: Math.cos(p.rot)*2, owner: p.owner, team: p.team, bounces: 0 });
         });
 
         socket.on('healthUpdate', (d) => {
@@ -123,7 +123,7 @@
             socket.emit('shoot', p);
             const m = new THREE.Mesh(new THREE.SphereGeometry(0.3), new THREE.MeshBasicMaterial({color:0xffffff}));
             m.position.set(p.x, 0.5, p.z); scene.add(m);
-            projectiles.push({ mesh: m, vx: Math.sin(p.rot)*2, vz: Math.cos(p.rot)*2, owner: socket.id, team: playerTeam });
+            projectiles.push({ mesh: m, vx: Math.sin(p.rot)*2, vz: Math.cos(p.rot)*2, owner: socket.id, team: playerTeam, bounces: 0 });
         }};
 
         function animate() {
@@ -140,7 +140,6 @@
                 let nz = playerCar.position.z + Math.cos(driftAngle) * speed;
 
                 const hitWall = buildings.some(b => nx > b.x-b.w/2-1 && nx < b.x+b.w/2+1 && nz > b.z-b.d/2-1 && nz < b.z+b.d/2+1);
-                // Car-to-Car Collision Check
                 const hitCar = [...Object.values(otherPlayers), ...Object.values(botCars)].some(c => new THREE.Vector3(nx, 0, nz).distanceTo(c.position) < 2.5);
 
                 if (!hitWall && !hitCar) { playerCar.position.x = nx; playerCar.position.z = nz; } else { speed *= -0.5; }
@@ -148,9 +147,19 @@
                 socket.emit('playerMovement', { x: playerCar.position.x, z: playerCar.position.z, rot: playerCar.rotation.y });
                 camera.position.lerp(new THREE.Vector3(0, 8, -15).applyMatrix4(playerCar.matrixWorld), 0.1); camera.lookAt(playerCar.position);
 
-                // Projectiles
+                // Projectile Physics (Bouncing)
                 for(let i=projectiles.length-1; i>=0; i--){
-                    const p = projectiles[i]; p.mesh.position.x += p.vx; p.mesh.position.z += p.vz;
+                    const p = projectiles[i]; 
+                    p.mesh.position.x += p.vx; p.mesh.position.z += p.vz;
+                    
+                    // Bounce off buildings
+                    buildings.forEach(b => {
+                        if (p.mesh.position.x > b.x-b.w/2 && p.mesh.position.x < b.x+b.w/2 && p.mesh.position.z > b.z-b.d/2 && p.mesh.position.z < b.z+b.d/2) {
+                            if (Math.abs(p.mesh.position.x - b.x) > Math.abs(p.mesh.position.z - b.z)) p.vx *= -1; else p.vz *= -1;
+                            p.bounces++;
+                        }
+                    });
+
                     if(p.owner === socket.id){
                         [...Object.entries(otherPlayers), ...Object.entries(botCars)].forEach(([id, c]) => {
                             if(p.mesh.position.distanceTo(c.position) < 2 && c.team !== p.team){
@@ -159,19 +168,17 @@
                             }
                         });
                     }
-                    if(p.mesh && p.mesh.position.length() > 1000){ scene.remove(p.mesh); projectiles.splice(i,1); }
+                    if(p.mesh && (p.mesh.position.length() > 1000 || p.bounces > 5)){ scene.remove(p.mesh); projectiles.splice(i,1); }
                 }
 
-                // Particles
                 for(let i=particles.length-1; i>=0; i--){
                     particles[i].m.position.add(particles[i].v); particles[i].t--;
                     if(particles[i].t <= 0){ scene.remove(particles[i].m); particles.splice(i,1); }
                 }
 
-                // Billboard HP Bars
                 [playerCar, ...Object.values(otherPlayers), ...Object.values(botCars)].forEach(c => c.getObjectByName("hpBar").lookAt(camera.position));
 
-                // Minimap Fix
+                // Minimap Restore
                 mapCtx.clearRect(0,0,200,200);
                 const toM = (v) => (v / 1000) * 200 + 100;
                 mapCtx.fillStyle = '#444'; buildings.forEach(b => mapCtx.fillRect(toM(b.x)-b.w/10, toM(b.z)-b.d/10, b.w/5, b.d/5));
