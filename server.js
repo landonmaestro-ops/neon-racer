@@ -5,11 +5,18 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
+
+// Create Socket.IO server attached to HTTP server
 const io = new Server(server, {
   pingInterval: 1000,
-  pingTimeout: 5000
+  pingTimeout: 5000,
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
 });
 
+// Serve static files from public directory
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- GAME CONFIGURATION ---
@@ -531,7 +538,6 @@ setInterval(() => {
 io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
 
-  // Send current state immediately
   if (gameState === 'PLAYING') {
     socket.emit('spectatorMode', { 
       message: 'Game in progress. You are spectating.',
@@ -572,7 +578,6 @@ io.on('connection', (socket) => {
       kills: 0
     };
     
-    // IMPORTANT: Emit joined event back to client
     socket.emit('joined', { id: socket.id, name: players[socket.id].name });
     addKillFeed(`${players[socket.id].name} joined the lobby`);
   });
@@ -730,4 +735,5 @@ initBots();
 
 server.listen(3000, () => {
   console.log('Server listening on *:3000');
+  console.log('Socket.IO should be available at /socket.io/socket.io.js');
 });
