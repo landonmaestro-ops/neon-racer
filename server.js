@@ -9,8 +9,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 let players = {};
 let bots = {};
 const TOTAL_CARS = 10;
+let scores = { red: 0, blue: 0 };
 
-// Centralized Building Data (Must stay synced with client)
 const buildings = [
     { x: 100, z: 100, w: 40, d: 40, h: 50 },
     { x: -150, z: -50, w: 50, d: 30, h: 80 },
@@ -22,7 +22,6 @@ let zones = { red: { x: 350, z: 0 }, blue: { x: -350, z: 0 } };
 
 function isOverBuilding(x, z) {
     return buildings.some(b => {
-        // Checking if coordinates are inside the building footprint + zone margin
         return x > b.x - (b.w/2 + 20) && x < b.x + (b.w/2 + 20) &&
                z > b.z - (b.d/2 + 20) && z < b.z + (b.d/2 + 20);
     });
@@ -33,34 +32,50 @@ function rotateZones() {
     let rx, rz, bx, bz, angle;
     let foundSafeSpot = false;
     let attempts = 0;
-
     while (!foundSafeSpot && attempts < 100) {
         angle = Math.random() * Math.PI * 2;
         rx = Math.cos(angle) * distance;
         rz = Math.sin(angle) * distance;
         bx = -Math.cos(angle) * distance;
         bz = -Math.sin(angle) * distance;
-
-        if (!isOverBuilding(rx, rz) && !isOverBuilding(bx, bz)) {
-            foundSafeSpot = true;
-        }
+        if (!isOverBuilding(rx, rz) && !isOverBuilding(bx, bz)) foundSafeSpot = true;
         attempts++;
     }
-
     zones.red = { x: rx, z: rz };
     zones.blue = { x: bx, z: bz };
     io.emit('zonesUpdate', zones);
 }
 
-setInterval(rotateZones, 4 * 60 * 1000); 
+setInterval(rotateZones, 4 * 60 * 1000);
 setInterval(() => { io.emit('zonesUpdate', zones); }, 1000);
+
+// Scoring Logic: Checks car positions every second
+setInterval(() => {
+    let redInZone = 0;
+    let blueInZone = 0;
+
+    const allCars = [...Object.values(players), ...Object.values(bots)];
+    
+    allCars.forEach(car => {
+        const targetZone = zones[car.team];
+        const dist = Math.sqrt((car.x - targetZone.x)**2 + (car.z - targetZone.z)**2);
+        if (dist < 15) { // 15 is the capture radius
+            if (car.team === 'red') redInZone++;
+            else blueInZone++;
+        }
+    });
+
+    if (redInZone > blueInZone) scores.red++;
+    else if (blueInZone > redInZone) scores.blue++;
+
+    io.emit('scoreUpdate', scores);
+}, 1000);
 
 function updateBots() {
     const playerCount = Object.keys(players).length;
     const botsNeeded = Math.max(0, TOTAL_CARS - playerCount);
-    
     const currentBotIds = Object.keys(bots);
-    // Remove extra bots if players joined
+    
     if (currentBotIds.length > botsNeeded) {
         for (let i = 0; i < (currentBotIds.length - botsNeeded); i++) {
             const id = currentBotIds[i];
@@ -69,7 +84,6 @@ function updateBots() {
         }
     }
 
-    // Add bots to ensure exactly 10 cars total
     while (Object.keys(bots).length < botsNeeded) {
         const id = 'bot_' + Math.random().toString(36).substr(2, 9);
         bots[id] = {
@@ -77,23 +91,20 @@ function updateBots() {
             z: (Math.random() - 0.5) * 600,
             rot: Math.random() * Math.PI * 2,
             team: Math.random() > 0.5 ? 'red' : 'blue',
-            speed: 0.4 + (Math.random() * 0.2)
+            speed: 0.6 + (Math.random() * 0.2) // Bots are now faster (standard speed was 0.4)
         };
     }
 }
 
-// Bot AI Loop
 setInterval(() => {
     Object.keys(bots).forEach(id => {
         const bot = bots[id];
         const target = zones[bot.team];
         if (!target) return;
-
         const dx = target.x - bot.x;
         const dz = target.z - bot.z;
         const dist = Math.sqrt(dx*dx + dz*dz);
-        
-        if (dist > 15) {
+        if (dist > 5) {
             const targetRot = Math.atan2(dx, dz);
             let diff = targetRot - bot.rot;
             while (diff < -Math.PI) diff += Math.PI * 2;
@@ -110,10 +121,9 @@ io.on('connection', (socket) => {
     const team = Math.random() > 0.5 ? 'red' : 'blue';
     players[socket.id] = { x: 0, z: 0, rot: 0, team: team };
     updateBots();
-    
     socket.emit('currentPlayers', players);
     socket.emit('zonesUpdate', zones);
-    socket.broadcast.emit('newPlayer', { id: socket.id, team: team });
+    socket.emit('scoreUpdate', scores);
 
     socket.on('playerMovement', (data) => {
         if (players[socket.id]) {
@@ -131,5 +141,4 @@ io.on('connection', (socket) => {
     });
 });
 
-const PORT = process.env.PORT || 3000;
-http.listen(PORT, () => console.log('SERVER REPAIRED AND ONLINE'));
+http.listen(3000, () => console.log('SERVER ONLINE'));
