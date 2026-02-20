@@ -11,6 +11,17 @@ let bots = {};
 const TOTAL_CARS = 10;
 let scores = { red: 0, blue: 0 };
 
+// Countdown logic
+let zoneTimer = 240; // 4 minutes in seconds
+setInterval(() => {
+    zoneTimer--;
+    if (zoneTimer <= 0) {
+        rotateZones();
+        zoneTimer = 240;
+    }
+    io.emit('timerUpdate', zoneTimer);
+}, 1000);
+
 const buildings = [
     { x: 100, z: 100, w: 40, d: 40, h: 50 },
     { x: -150, z: -50, w: 50, d: 30, h: 80 },
@@ -19,13 +30,6 @@ const buildings = [
 ];
 
 let zones = { red: { x: 350, z: 0 }, blue: { x: -350, z: 0 } };
-
-function isOverBuilding(x, z) {
-    return buildings.some(b => {
-        return x > b.x - (b.w/2 + 20) && x < b.x + (b.w/2 + 20) &&
-               z > b.z - (b.d/2 + 20) && z < b.z + (b.d/2 + 20);
-    });
-}
 
 function rotateZones() {
     const distance = 350;
@@ -46,28 +50,26 @@ function rotateZones() {
     io.emit('zonesUpdate', zones);
 }
 
-setInterval(rotateZones, 4 * 60 * 1000);
-setInterval(() => { io.emit('zonesUpdate', zones); }, 1000);
+function isOverBuilding(x, z) {
+    return buildings.some(b => {
+        return x > b.x - (b.w/2 + 20) && x < b.x + (b.w/2 + 20) &&
+               z > b.z - (b.d/2 + 20) && z < b.z + (b.d/2 + 20);
+    });
+}
 
-// Scoring Logic: Checks car positions every second
+// Scoring Logic
 setInterval(() => {
-    let redInZone = 0;
-    let blueInZone = 0;
-
+    let redInZone = 0, blueInZone = 0;
     const allCars = [...Object.values(players), ...Object.values(bots)];
-    
     allCars.forEach(car => {
         const targetZone = zones[car.team];
         const dist = Math.sqrt((car.x - targetZone.x)**2 + (car.z - targetZone.z)**2);
-        if (dist < 15) { // 15 is the capture radius
-            if (car.team === 'red') redInZone++;
-            else blueInZone++;
+        if (dist < 15) {
+            if (car.team === 'red') redInZone++; else blueInZone++;
         }
     });
-
     if (redInZone > blueInZone) scores.red++;
     else if (blueInZone > redInZone) scores.blue++;
-
     io.emit('scoreUpdate', scores);
 }, 1000);
 
@@ -75,70 +77,70 @@ function updateBots() {
     const playerCount = Object.keys(players).length;
     const botsNeeded = Math.max(0, TOTAL_CARS - playerCount);
     const currentBotIds = Object.keys(bots);
-    
     if (currentBotIds.length > botsNeeded) {
         for (let i = 0; i < (currentBotIds.length - botsNeeded); i++) {
             const id = currentBotIds[i];
-            delete bots[id];
-            io.emit('botRemoved', id);
+            delete bots[id]; io.emit('botRemoved', id);
         }
     }
-
     while (Object.keys(bots).length < botsNeeded) {
         const id = 'bot_' + Math.random().toString(36).substr(2, 9);
-        bots[id] = {
-            x: (Math.random() - 0.5) * 600,
-            z: (Math.random() - 0.5) * 600,
-            rot: Math.random() * Math.PI * 2,
-            team: Math.random() > 0.5 ? 'red' : 'blue',
-            speed: 0.6 + (Math.random() * 0.2) // Bots are now faster (standard speed was 0.4)
-        };
+        bots[id] = { x: (Math.random() - 0.5) * 600, z: (Math.random() - 0.5) * 600, rot: Math.random() * Math.PI * 2, team: Math.random() > 0.5 ? 'red' : 'blue', speed: 0.7, health: 2 };
     }
 }
 
+// Bot AI & Collision Reset
 setInterval(() => {
     Object.keys(bots).forEach(id => {
         const bot = bots[id];
         const target = zones[bot.team];
         if (!target) return;
-        const dx = target.x - bot.x;
-        const dz = target.z - bot.z;
-        const dist = Math.sqrt(dx*dx + dz*dz);
-        if (dist > 5) {
-            const targetRot = Math.atan2(dx, dz);
-            let diff = targetRot - bot.rot;
-            while (diff < -Math.PI) diff += Math.PI * 2;
-            while (diff > Math.PI) diff -= Math.PI * 2;
-            bot.rot += diff * 0.1;
-            bot.x += Math.sin(bot.rot) * bot.speed;
-            bot.z += Math.cos(bot.rot) * bot.speed;
-        }
+        const dx = target.x - bot.x, dz = target.z - bot.z;
+        const targetRot = Math.atan2(dx, dz);
+        let diff = targetRot - bot.rot;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        bot.rot += diff * 0.1;
+        bot.x += Math.sin(bot.rot) * bot.speed;
+        bot.z += Math.cos(bot.rot) * bot.speed;
     });
     io.emit('botUpdate', bots);
 }, 50);
 
 io.on('connection', (socket) => {
     const team = Math.random() > 0.5 ? 'red' : 'blue';
-    players[socket.id] = { x: 0, z: 0, rot: 0, team: team };
+    players[socket.id] = { x: 0, z: 0, rot: 0, team: team, health: 2 };
     updateBots();
     socket.emit('currentPlayers', players);
     socket.emit('zonesUpdate', zones);
-    socket.emit('scoreUpdate', scores);
-
+    
     socket.on('playerMovement', (data) => {
         if (players[socket.id]) {
-            players[socket.id].x = data.x; 
-            players[socket.id].z = data.z; 
-            players[socket.id].rot = data.rot;
+            players[socket.id].x = data.x; players[socket.id].z = data.z; players[socket.id].rot = data.rot;
             socket.broadcast.emit('playerMoved', { id: socket.id, info: players[socket.id] });
         }
     });
 
-    socket.on('disconnect', () => { 
-        delete players[socket.id]; 
-        updateBots(); 
-        io.emit('playerDisconnected', socket.id); 
+    socket.on('shoot', (proj) => {
+        socket.broadcast.emit('projectileSpawned', proj);
     });
+
+    socket.on('hit', (data) => {
+        let target;
+        if (data.type === 'player') target = players[data.id];
+        else target = bots[data.id];
+
+        if (target && target.team !== data.attackerTeam) {
+            target.health -= 1;
+            if (target.health <= 0) {
+                target.x = 0; target.z = 0; target.health = 2;
+                if (data.type === 'player') io.emit('playerReset', { id: data.id });
+            }
+            io.emit('healthUpdate', { id: data.id, health: target.health, type: data.type });
+        }
+    });
+
+    socket.on('disconnect', () => { delete players[socket.id]; updateBots(); io.emit('playerDisconnected', socket.id); });
 });
 
 http.listen(3000, () => console.log('SERVER ONLINE'));
