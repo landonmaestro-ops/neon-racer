@@ -21,10 +21,9 @@ const JUMP_FORCE = 10;
 const SLIDE_BOOST = 1.5;
 const FRICTION_GROUND = 0.85;
 const FRICTION_AIR = 0.98;
-const MAX_PLAYERS = 20;
-const BOT_COUNT = 20;
-const ROUND_DURATION = 120; // seconds
-const LOBBY_DURATION = 60; // seconds
+const BOT_COUNT = 19; // 19 bots + 1 player = 20
+const ROUND_DURATION = 120;
+const LOBBY_DURATION = 60;
 
 // Classes
 const CLASSES = {
@@ -35,20 +34,20 @@ const CLASSES = {
 };
 
 // Game State
-let gameState = 'LOBBY'; // LOBBY, PLAYING, ENDED
+let gameState = 'LOBBY';
 let roundTime = LOBBY_DURATION;
 let players = {};
 let bots = {};
-let projectiles = [];
 let killFeed = [];
 let leaderboard = [];
 
-// Bot names
+// Bot names - regular player names
 const botNames = [
   'ShadowStriker', 'PhantomShot', 'CyberHunter', 'NeonKiller', 'VoidWalker',
   'SteelEagle', 'GhostRecon', 'BlazeRunner', 'NightHawk', 'IronFist',
   'ThunderBolt', 'SilentDeath', 'RapidFire', 'HeadHunter', 'SniperWolf',
-  'ViperStrike', 'CobraKai', 'DragonSlayer', 'TitanFall', 'WarMachine'
+  'ViperStrike', 'CobraKai', 'DragonSlayer', 'TitanFall', 'xX_DarkSlayer_Xx',
+  'NoScope360', 'ProGamer2024', 'StealthNinja', 'MegaKill', 'UltraInstinct'
 ];
 
 // --- BOT AI SYSTEM ---
@@ -73,12 +72,13 @@ class BotAI {
     this.crouching = false;
     this.lastShot = 0;
     this.target = null;
-    this.state = 'WANDER'; // WANDER, CHASE, ATTACK, FLEE
+    this.state = 'WANDER';
     this.wanderTarget = this.getRandomPoint();
     this.yaw = Math.random() * Math.PI * 2;
     this.pitch = 0;
     this.kills = 0;
     this.alive = true;
+    this.respawnTimer = 0;
   }
 
   getRandomPoint() {
@@ -89,7 +89,13 @@ class BotAI {
   }
 
   update(delta, allPlayers) {
-    if (!this.alive) return;
+    if (!this.alive) {
+      this.respawnTimer -= delta;
+      if (this.respawnTimer <= 0) {
+        this.respawn();
+      }
+      return;
+    }
 
     // Find nearest target
     let nearest = null;
@@ -121,8 +127,8 @@ class BotAI {
     this.target = nearest;
 
     // AI State Machine
-    if (this.target && nearestDist < 30) {
-      if (nearestDist < 15) {
+    if (this.target && nearestDist < 40) {
+      if (nearestDist < 20) {
         this.state = 'ATTACK';
       } else {
         this.state = 'CHASE';
@@ -144,8 +150,18 @@ class BotAI {
         break;
     }
 
-    // Physics
     this.updatePhysics(delta);
+  }
+
+  respawn() {
+    this.alive = true;
+    this.hp = this.maxHp;
+    this.position = {
+      x: (Math.random() - 0.5) * WORLD_SIZE * 0.8,
+      y: 10,
+      z: (Math.random() - 0.5) * WORLD_SIZE * 0.8
+    };
+    this.velocity = { x: 0, y: 0, z: 0 };
   }
 
   wander(delta) {
@@ -159,6 +175,11 @@ class BotAI {
 
     this.yaw = Math.atan2(dx, dz);
     this.moveForward(delta);
+    
+    // Random jump
+    if (Math.random() < 0.01 && this.grounded) {
+      this.jump();
+    }
   }
 
   chase(delta) {
@@ -169,7 +190,8 @@ class BotAI {
     this.moveForward(delta);
     
     // Slide hop occasionally
-    if (Math.random() < 0.02 && this.grounded) {
+    if (Math.random() < 0.03 && this.grounded) {
+      this.sliding = true;
       this.jump();
     }
   }
@@ -182,12 +204,12 @@ class BotAI {
     const dist = Math.hypot(dx, dz);
     
     this.yaw = Math.atan2(dx, dz);
-    this.pitch = -Math.atan2(dy, dist);
+    this.pitch = -Math.atan2(dy - 1.5, dist);
 
-    // Strafe around target
-    const strafeDir = Math.sin(Date.now() * 0.003) > 0 ? 1 : -1;
-    this.velocity.x += Math.cos(this.yaw + Math.PI/2) * strafeDir * 2 * delta;
-    this.velocity.z += Math.sin(this.yaw + Math.PI/2) * strafeDir * 2 * delta;
+    // Strafe
+    const strafeDir = Math.sin(Date.now() * 0.002) > 0 ? 1 : -1;
+    this.velocity.x += Math.cos(this.yaw + Math.PI/2) * strafeDir * 3 * delta;
+    this.velocity.z += Math.sin(this.yaw + Math.PI/2) * strafeDir * 3 * delta;
 
     // Shoot
     const now = Date.now();
@@ -200,7 +222,7 @@ class BotAI {
 
   moveForward(delta) {
     const config = CLASSES[this.classType];
-    const speed = config.speed * PLAYER_SPEED * 0.5;
+    const speed = config.speed * PLAYER_SPEED * 0.6;
     this.velocity.x += Math.sin(this.yaw) * speed * delta;
     this.velocity.z += Math.cos(this.yaw) * speed * delta;
   }
@@ -213,7 +235,6 @@ class BotAI {
   }
 
   shoot() {
-    // Bot shooting logic
     const config = CLASSES[this.classType];
     const origin = {
       x: this.position.x,
@@ -232,15 +253,13 @@ class BotAI {
     dir.y += (Math.random() - 0.5) * config.spread;
     dir.z += (Math.random() - 0.5) * config.spread;
 
-    // Check hits
     this.checkHitscan(origin, dir);
     
-    // Broadcast tracer
     io.emit('tracer', { 
       origin, 
       direction: dir, 
-      team: 'bot',
-      id: this.id
+      id: this.id,
+      isBot: true
     });
   }
 
@@ -262,6 +281,7 @@ class BotAI {
         if (p.hp <= 0) {
           this.kills++;
           p.alive = false;
+          p.deathTime = Date.now();
           addKillFeed(`${this.name} eliminated ${p.name}`);
         }
       }
@@ -282,6 +302,7 @@ class BotAI {
         if (b.hp <= 0) {
           this.kills++;
           b.alive = false;
+          b.respawnTimer = 3; // Respawn after 3 seconds
           addKillFeed(`${this.name} eliminated ${b.name}`);
         }
       }
@@ -325,6 +346,7 @@ class BotAI {
       this.grounded = true;
       this.velocity.x *= FRICTION_GROUND;
       this.velocity.z *= FRICTION_GROUND;
+      this.sliding = false;
     } else {
       this.grounded = false;
       this.velocity.x *= FRICTION_AIR;
@@ -334,7 +356,7 @@ class BotAI {
     this.position.x = Math.max(-WORLD_SIZE, Math.min(WORLD_SIZE, this.position.x));
     this.position.z = Math.max(-WORLD_SIZE, Math.min(WORLD_SIZE, this.position.z));
 
-    // Update quaternion from yaw/pitch
+    // Update quaternion
     const cy = Math.cos(this.yaw * 0.5);
     const sy = Math.sin(this.yaw * 0.5);
     const cp = Math.cos(this.pitch * 0.5);
@@ -352,8 +374,8 @@ class BotAI {
 function initBots() {
   bots = {};
   for (let i = 0; i < BOT_COUNT; i++) {
-    const id = `bot_${i}`;
-    bots[id] = new BotAI(id, botNames[i]);
+    const id = `p_${Math.random().toString(36).substr(2, 9)}`; // Looks like player ID
+    bots[id] = new BotAI(id, botNames[i % botNames.length]);
   }
 }
 
@@ -377,7 +399,6 @@ function startRound() {
     p.velocity = { x: 0, y: 0, z: 0 };
   }
 
-  // Reset bots
   initBots();
   
   killFeed = [];
@@ -389,10 +410,22 @@ function endRound() {
   gameState = 'ENDED';
   roundTime = LOBBY_DURATION;
   
-  // Calculate leaderboard
+  // Calculate leaderboard - bots appear as regular players
   const allCombatants = [
-    ...Object.values(players).map(p => ({ name: p.name, kills: p.kills, alive: p.alive, isBot: false })),
-    ...Object.values(bots).map(b => ({ name: b.name, kills: b.kills, alive: b.alive, isBot: true }))
+    ...Object.values(players).map(p => ({ 
+      id: p.id,
+      name: p.name, 
+      kills: p.kills, 
+      alive: p.alive, 
+      isBot: false 
+    })),
+    ...Object.values(bots).map(b => ({ 
+      id: b.id,
+      name: b.name, 
+      kills: b.kills, 
+      alive: b.alive, 
+      isBot: true 
+    }))
   ];
   
   allCombatants.sort((a, b) => {
@@ -408,11 +441,11 @@ function endRound() {
 
 function addKillFeed(msg) {
   killFeed.unshift({ msg, time: Date.now() });
-  if (killFeed.length > 10) killFeed.pop();
+  if (killFeed.length > 8) killFeed.pop();
   io.emit('killFeed', { msg });
 }
 
-// --- PHYSICS ENGINE ---
+// --- PHYSICS ---
 function updatePlayerPhysics(player, delta) {
   if (!player.alive) return;
   
@@ -453,17 +486,11 @@ setInterval(() => {
   if (gameState === 'LOBBY' || gameState === 'ENDED') {
     roundTime -= delta;
     if (roundTime <= 0) {
-      if (gameState === 'LOBBY') startRound();
-      else startRound();
+      startRound();
     }
   } else if (gameState === 'PLAYING') {
     roundTime -= delta;
-    
-    // Check win condition (last man standing or time up)
-    const alivePlayers = Object.values(players).filter(p => p.alive).length;
-    const aliveBots = Object.values(bots).filter(b => b.alive).length;
-    
-    if (roundTime <= 0 || (alivePlayers + aliveBots <= 1)) {
+    if (roundTime <= 0) {
       endRound();
     }
   }
@@ -478,11 +505,13 @@ setInterval(() => {
     updatePlayerPhysics(players[id], delta);
   }
 
-  // Broadcast World State
-  const gameData = {
-    state: gameState,
-    time: Math.ceil(roundTime),
-    players: Object.values(players).map(p => ({
+  // Build world state - bots look like players
+  const allEntities = [];
+  
+  // Add real players
+  for (const id in players) {
+    const p = players[id];
+    allEntities.push({
       id: p.id,
       x: p.position.x, y: p.position.y, z: p.position.z,
       qx: p.quaternion.x, qy: p.quaternion.y, qz: p.quaternion.z, qw: p.quaternion.w,
@@ -493,22 +522,32 @@ setInterval(() => {
       alive: p.alive,
       kills: p.kills,
       name: p.name
-    })),
-    bots: Object.values(bots).map(b => ({
+    });
+  }
+  
+  // Add bots (appear as regular players)
+  for (const id in bots) {
+    const b = bots[id];
+    allEntities.push({
       id: b.id,
       x: b.position.x, y: b.position.y, z: b.position.z,
       qx: b.quaternion.x, qy: b.quaternion.y, qz: b.quaternion.z, qw: b.quaternion.w,
       classType: b.classType,
       sliding: b.sliding,
       hp: b.hp,
+      maxHp: b.maxHp,
       alive: b.alive,
       kills: b.kills,
       name: b.name
-    })),
+    });
+  }
+
+  io.emit('worldUpdate', {
+    state: gameState,
+    time: Math.ceil(roundTime),
+    entities: allEntities,
     killFeed: killFeed.slice(0, 5)
-  };
-  
-  io.emit('worldUpdate', gameData);
+  });
 
 }, 1000 / TICK_RATE);
 
@@ -516,11 +555,10 @@ setInterval(() => {
 io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
 
-  // If game is in progress, send spectator mode
+  // Send current game state
   if (gameState === 'PLAYING') {
     socket.emit('spectatorMode', { 
-      message: 'Game in progress. You are in spectator mode.',
-      leaderboard,
+      message: 'Game in progress. You are spectating.',
       timeRemaining: roundTime
     });
   } else {
@@ -529,7 +567,7 @@ io.on('connection', (socket) => {
 
   socket.on('joinGame', (data) => {
     if (gameState === 'PLAYING') {
-      socket.emit('error', { msg: 'Game in progress. Please wait for the next round.' });
+      socket.emit('error', { msg: 'Game in progress. Spectate until next round.' });
       return;
     }
 
@@ -552,9 +590,8 @@ io.on('connection', (socket) => {
       sliding: false,
       crouching: false,
       lastShot: 0,
-      alive: false, // Not alive until round starts
-      kills: 0,
-      inputs: {}
+      alive: false,
+      kills: 0
     };
     
     socket.emit('joined', { id: socket.id });
@@ -567,15 +604,16 @@ io.on('connection', (socket) => {
     const p = players[socket.id];
     const config = CLASSES[p.classType];
     
+    // Update rotation from client
     p.quaternion = inputs.quaternion;
     
-    const speed = config.speed * PLAYER_SPEED * (p.sliding ? 1.5 : 1.0) * (p.crouching ? 0.6 : 1.0);
+    // Calculate movement
+    const speed = config.speed * PLAYER_SPEED * (p.sliding ? 1.5 : 1.0) * (inputs.keys.crouch ? 0.6 : 1.0);
     
-    const yaw = inputs.yaw;
-    const forwardX = Math.sin(yaw);
-    const forwardZ = Math.cos(yaw);
-    const rightX = Math.sin(yaw + Math.PI / 2);
-    const rightZ = Math.cos(yaw + Math.PI / 2);
+    const forwardX = Math.sin(inputs.yaw);
+    const forwardZ = Math.cos(inputs.yaw);
+    const rightX = Math.sin(inputs.yaw + Math.PI / 2);
+    const rightZ = Math.cos(inputs.yaw + Math.PI / 2);
 
     let moveX = 0;
     let moveZ = 0;
@@ -631,9 +669,9 @@ io.on('connection', (socket) => {
     const origin = data.origin;
     const direction = data.direction;
     
-    io.emit('tracer', { origin, direction, id: p.id, isPlayer: true });
+    io.emit('tracer', { origin, direction, id: p.id });
 
-    // Check hits on players
+    // Check hits on all entities (players and bots)
     for (const id in players) {
       if (id === socket.id) continue;
       const target = players[id];
@@ -649,6 +687,7 @@ io.on('connection', (socket) => {
         
         if (target.hp <= 0) {
           target.alive = false;
+          target.deathTime = Date.now();
           p.kills++;
           addKillFeed(`${p.name} eliminated ${target.name}`);
           socket.emit('hitMarker', { kill: true });
@@ -673,6 +712,7 @@ io.on('connection', (socket) => {
         
         if (target.hp <= 0) {
           target.alive = false;
+          target.respawnTimer = 3;
           p.kills++;
           addKillFeed(`${p.name} eliminated ${target.name}`);
           socket.emit('hitMarker', { kill: true });
@@ -713,7 +753,7 @@ function checkHitscanCollision(origin, dir, targetPos) {
   return false;
 }
 
-// Initialize bots for first round
+// Initialize
 initBots();
 
 server.listen(3000, () => {
