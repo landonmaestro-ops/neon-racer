@@ -10,29 +10,29 @@ let players = {};
 let bots = {};
 const TOTAL_CARS = 10;
 
-// Zones logic
 let zones = {
     red: { x: 200, z: 200 },
     blue: { x: -200, z: -200 }
 };
 
 function rotateZones() {
-    zones.red = { x: (Math.random() - 0.5) * 800, z: (Math.random() - 0.5) * 800 };
-    zones.blue = { x: (Math.random() - 0.5) * 800, z: (Math.random() - 0.5) * 800 };
+    zones.red = { x: (Math.random() - 0.5) * 700, z: (Math.random() - 0.5) * 700 };
+    zones.blue = { x: (Math.random() - 0.5) * 700, z: (Math.random() - 0.5) * 700 };
     io.emit('zonesUpdate', zones);
 }
-setInterval(rotateZones, 4 * 60 * 1000); // 4 minutes
+setInterval(rotateZones, 4 * 60 * 1000);
+
+// Heartbeat to keep zones synced
+setInterval(() => { io.emit('zonesUpdate', zones); }, 1000);
 
 function updateBots() {
     const playerCount = Object.keys(players).length;
     const botsNeeded = Math.max(0, TOTAL_CARS - playerCount);
-    
     while (Object.keys(bots).length > botsNeeded) {
         const id = Object.keys(bots)[0];
         delete bots[id];
         io.emit('botRemoved', id);
     }
-
     while (Object.keys(bots).length < botsNeeded) {
         const id = 'bot_' + Math.random().toString(36).substr(2, 9);
         const team = Math.random() > 0.5 ? 'red' : 'blue';
@@ -41,12 +41,12 @@ function updateBots() {
             z: (Math.random() - 0.5) * 800,
             rot: Math.random() * Math.PI * 2,
             team: team,
-            speed: 0.2 + Math.random() * 0.2
+            speed: 0.3 // Bots move at a constant clip now
         };
     }
 }
 
-// Bot AI: Move toward respective zones
+// Fixed Bot AI: Direct Steering
 setInterval(() => {
     Object.keys(bots).forEach(id => {
         const bot = bots[id];
@@ -55,46 +55,36 @@ setInterval(() => {
         // Calculate angle to zone
         const dx = target.x - bot.x;
         const dz = target.z - bot.z;
-        const targetRot = Math.atan2(dx, dz);
+        const dist = Math.sqrt(dx*dx + dz*dz);
         
-        // Slowly rotate toward target
-        let diff = targetRot - bot.rot;
-        while (diff < -Math.PI) diff += Math.PI * 2;
-        while (diff > Math.PI) diff -= Math.PI * 2;
-        bot.rot += diff * 0.05;
+        if (dist > 10) { // If not inside the zone
+            const targetRot = Math.atan2(dx, dz);
+            let diff = targetRot - bot.rot;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            bot.rot += diff * 0.1; // Turn speed
 
-        bot.x += Math.sin(bot.rot) * bot.speed;
-        bot.z += Math.cos(bot.rot) * bot.speed;
+            bot.x += Math.sin(bot.rot) * bot.speed;
+            bot.z += Math.cos(bot.rot) * bot.speed;
+        }
     });
     io.emit('botUpdate', bots);
-}, 100);
+}, 50);
 
 io.on('connection', (socket) => {
     const team = Math.random() > 0.5 ? 'red' : 'blue';
     players[socket.id] = { x: 0, z: 0, rot: 0, team: team };
     updateBots();
-    
     socket.emit('currentPlayers', players);
     socket.emit('zonesUpdate', zones);
     socket.broadcast.emit('newPlayer', { id: socket.id, team: team });
-
     socket.on('playerMovement', (data) => {
         if (players[socket.id]) {
-            players[socket.id].x = data.x;
-            players[socket.id].z = data.z;
-            players[socket.id].rot = data.rot;
+            players[socket.id].x = data.x; players[socket.id].z = data.z; players[socket.id].rot = data.rot;
             socket.broadcast.emit('playerMoved', { id: socket.id, info: players[socket.id] });
         }
     });
-
-    socket.on('chatMessage', (msg) => io.emit('chatMessage', { id: socket.id, msg }));
-
-    socket.on('disconnect', () => {
-        delete players[socket.id];
-        updateBots();
-        io.emit('playerDisconnected', socket.id);
-    });
+    socket.on('disconnect', () => { delete players[socket.id]; updateBots(); io.emit('playerDisconnected', socket.id); });
 });
 
-const PORT = process.env.PORT || 3000;
-http.listen(PORT, () => console.log('BATTLE SERVER ONLINE'));
+http.listen(process.env.PORT || 3000);
