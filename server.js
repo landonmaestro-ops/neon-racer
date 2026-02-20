@@ -57,19 +57,18 @@ function updateBots() {
         const id = 'bot_' + Math.random().toString(36).substr(2, 5);
         const team = (redTotal <= blueTotal) ? 'red' : 'blue';
         if (team === 'red') redTotal++; else blueTotal++;
-        
-        // 50/50 Role Split: half are "strikers" (hunt), half are "defenders" (zones)
         const role = (i % 2 === 0) ? 'striker' : 'defender';
         
         bots[id] = { 
-            x: (Math.random()-0.5)*200, 
-            z: (Math.random()-0.5)*200, 
+            x: (Math.random()-0.5)*100, 
+            z: (Math.random()-0.5)*100, 
             rot: 0, 
             team, 
             health: 2, 
             speed: 0.75, 
             lastShot: 0,
-            role: role
+            role: role,
+            spawnGhost: Date.now() + 2000 // Bots get 2s ghosting
         };
     }
 }
@@ -82,18 +81,15 @@ setInterval(() => {
         let minDist = Infinity;
 
         const enemies = [...Object.entries(players), ...Object.entries(bots)].filter(([eid, e]) => e.team !== bot.team);
-        
         enemies.forEach(([eid, e]) => {
             const d = Math.sqrt((e.x - bot.x)**2 + (e.z - bot.z)**2);
             if (d < minDist) { minDist = d; closestEnemy = e; }
         });
 
-        // Split AI Logic
         if (bot.role === 'striker' && closestEnemy && minDist < 250) {
             targetPos = { x: closestEnemy.x, z: closestEnemy.z };
-            bot.speed = minDist > 40 ? 1.3 : 0.8; // Nitro chasing
+            bot.speed = minDist > 40 ? 1.3 : 0.8;
         } else {
-            // Defenders go to zone, but shoot if enemies get close
             targetPos = zones[bot.team];
             bot.speed = 0.75;
         }
@@ -107,7 +103,6 @@ setInterval(() => {
         bot.x += Math.sin(bot.rot) * bot.speed;
         bot.z += Math.cos(bot.rot) * bot.speed;
 
-        // Combat
         const now = Date.now();
         if (closestEnemy && minDist < 70 && now - bot.lastShot > 2500) {
             io.emit('projectileSpawned', { x: bot.x, z: bot.z, rot: Math.atan2(closestEnemy.x - bot.x, closestEnemy.z - bot.z), owner: id, team: bot.team });
@@ -151,9 +146,11 @@ io.on('connection', (socket) => {
         if (t && t.team !== data.attackerTeam) {
             t.health -= 1;
             if (t.health <= 0) {
-                // Fixed Stuck Respawn: Move away from center slightly so they don't stack
-                t.x = (Math.random()-0.5) * 40; 
-                t.z = (Math.random()-0.5) * 40; 
+                // SPREAD SPAWN: Prevents stacking on exact 0,0
+                const ang = Math.random() * Math.PI * 2;
+                const dist = 20 + Math.random() * 30;
+                t.x = Math.cos(ang) * dist;
+                t.z = Math.sin(ang) * dist;
                 t.health = 2;
                 io.emit('explosion', { x: data.impactX, z: data.impactZ, color: t.team === 'red' ? 0xff0000 : 0x0066ff });
                 if (data.type === 'player') io.emit('playerReset', { id: data.id, x: t.x, z: t.z });
