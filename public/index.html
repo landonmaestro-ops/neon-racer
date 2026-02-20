@@ -1,29 +1,40 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Neon Racer: Cyber City</title>
+    <title>Neon Racer: Bot City</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', Courier, monospace; }
-        #ui { position: absolute; top: 20px; left: 20px; color: #0ff; z-index: 10; pointer-events: none; text-shadow: 0 0 5px #0ff; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: monospace; }
+        #ui { position: absolute; top: 20px; left: 20px; color: #0ff; z-index: 10; pointer-events: none; }
+        
+        /* Minimap Styling */
+        #minimap {
+            position: absolute; top: 20px; right: 20px;
+            width: 200px; height: 200px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid #0ff;
+            border-radius: 10px; z-index: 30;
+        }
+
         #chat-container {
             position: absolute; bottom: 20px; left: 20px; width: 300px;
             background: rgba(0, 0, 0, 0.8); border: 2px solid #0ff; padding: 10px; z-index: 20;
         }
-        #messages { height: 120px; overflow-y: auto; color: #0ff; margin-bottom: 10px; font-size: 13px; }
+        #messages { height: 100px; overflow-y: auto; color: #0ff; margin-bottom: 10px; font-size: 12px; }
         #chat-input { width: 92%; background: #000; border: 1px solid #0ff; color: #fff; padding: 5px; outline: none; }
-        .nitro-bar { color: #f0f; font-weight: bold; }
     </style>
 </head>
 <body>
 
     <div id="ui">
-        <h1>NEON RACER: CITY</h1>
-        <p>WASD: Drive | SPACE: <span class="nitro-bar">NITRO BOOST</span></p>
+        <h1>NEON RACER</h1>
+        <p>SPACE: Nitro | SCANNING AREA...</p>
     </div>
+
+    <canvas id="minimap"></canvas>
 
     <div id="chat-container">
         <div id="messages"></div>
-        <input type="text" id="chat-input" placeholder="Type to chat...">
+        <input type="text" id="chat-input" placeholder="Press Enter to chat...">
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
@@ -46,39 +57,27 @@
 
         const composer = new EffectComposer(renderer);
         composer.addPass(new RenderPass(scene, camera));
-        const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
-        composer.addPass(bloom);
+        composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85));
 
-        // Environment: Huge Grid and Skyscrapers
-        scene.add(new THREE.GridHelper(2000, 100, 0xff00ff, 0x222222));
-        
-        function createBuildings() {
-            const colors = [0x00ffff, 0xff00ff, 0xffff00, 0x00ff00];
-            for(let i = 0; i < 60; i++) {
-                const h = 50 + Math.random() * 150; // Very tall
-                const w = 10 + Math.random() * 15;
-                const color = colors[Math.floor(Math.random() * colors.length)];
-                
-                const geo = new THREE.BoxGeometry(w, h, w);
-                const mat = new THREE.MeshStandardMaterial({ 
-                    color: 0x111111, emissive: color, emissiveIntensity: 0.5 
-                });
-                const b = new THREE.Mesh(geo, mat);
-                
-                // Spread them out significantly
-                b.position.set((Math.random() - 0.5) * 1000, h/2, (Math.random() - 0.5) * 1000);
-                scene.add(b);
-            }
+        // Minimap Setup
+        const mapCanvas = document.getElementById('minimap');
+        const mapCtx = mapCanvas.getContext('2d');
+        mapCanvas.width = 200; mapCanvas.height = 200;
+
+        // Environment
+        scene.add(new THREE.GridHelper(1000, 50, 0xff00ff, 0x222222));
+        for(let i = 0; i < 50; i++) {
+            const h = 60 + Math.random() * 120;
+            const b = new THREE.Mesh(new THREE.BoxGeometry(15, h, 15), new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0x00ffff, emissiveIntensity: 0.5 }));
+            b.position.set((Math.random()-0.5)*800, h/2, (Math.random()-0.5)*800);
+            scene.add(b);
         }
-        createBuildings();
-
-        const light = new THREE.PointLight(0xffffff, 10, 500);
-        scene.add(light);
 
         let playerCar;
         const otherPlayers = {};
+        const botCars = {};
 
-        function createCar(color = 0x00ffff) {
+        function createCar(color) {
             const group = new THREE.Group();
             const body = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.6, 3), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 2 }));
             body.position.y = 0.3;
@@ -86,6 +85,7 @@
             return group;
         }
 
+        // Network Events
         socket.on('currentPlayers', (players) => {
             Object.keys(players).forEach(id => {
                 if (id === socket.id) {
@@ -110,11 +110,26 @@
             }
         });
 
+        socket.on('botUpdate', (bots) => {
+            Object.keys(bots).forEach(id => {
+                if (!botCars[id]) {
+                    botCars[id] = createCar(0xff0000);
+                    scene.add(botCars[id]);
+                }
+                botCars[id].position.set(bots[id].x, 0, bots[id].z);
+                botCars[id].rotation.y = bots[id].rot;
+            });
+        });
+
+        socket.on('botRemoved', (id) => {
+            if (botCars[id]) { scene.remove(botCars[id]); delete botCars[id]; }
+        });
+
         socket.on('playerDisconnected', (id) => {
             if (otherPlayers[id]) { scene.remove(otherPlayers[id]); delete otherPlayers[id]; }
         });
 
-        // Chat Input Logic
+        // Chat
         const chatInput = document.getElementById('chat-input');
         chatInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && chatInput.value.trim() !== '') {
@@ -125,13 +140,13 @@
         });
 
         socket.on('chatMessage', (data) => {
-            const msg = document.createElement('div');
-            msg.innerHTML = `<b>${data.id.substring(0, 5)}:</b> ${data.msg}`;
-            document.getElementById('messages').appendChild(msg);
+            const m = document.createElement('div');
+            m.innerHTML = `<b>${data.id.substring(0, 4)}:</b> ${data.msg}`;
+            document.getElementById('messages').appendChild(m);
             document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
         });
 
-        // Driving & Nitro Physics
+        // Controls & Loop
         const keys = {};
         window.onkeydown = (e) => { if(document.activeElement !== chatInput) keys[e.code] = true; };
         window.onkeyup = (e) => keys[e.code] = false;
@@ -142,26 +157,32 @@
             if (playerCar) {
                 const isNitro = keys['Space'];
                 const accel = isNitro ? 0.015 : 0.005;
-                const maxFov = isNitro ? 85 : 75;
-
                 if (keys['KeyW']) speed += accel;
                 if (keys['KeyS']) speed -= accel;
-                speed *= 0.96; // Friction
-                
+                speed *= 0.96;
                 playerCar.translateZ(speed);
                 if (keys['KeyA']) playerCar.rotation.y += 0.04;
                 if (keys['KeyD']) playerCar.rotation.y -= 0.04;
 
                 socket.emit('playerMovement', { x: playerCar.position.x, z: playerCar.position.z, rot: playerCar.rotation.y });
 
-                // Smooth Camera + Nitro Zoom
-                camera.fov = THREE.MathUtils.lerp(camera.fov, maxFov, 0.1);
+                camera.fov = THREE.MathUtils.lerp(camera.fov, isNitro ? 85 : 75, 0.1);
                 camera.updateProjectionMatrix();
-                
                 const offset = new THREE.Vector3(0, 6, -12).applyMatrix4(playerCar.matrixWorld);
                 camera.position.lerp(offset, 0.1);
                 camera.lookAt(playerCar.position);
-                light.position.copy(playerCar.position).y += 5;
+
+                // Draw Minimap
+                mapCtx.clearRect(0, 0, 200, 200);
+                const drawDot = (x, z, color) => {
+                    const px = (x / 1000) * 200 + 100;
+                    const pz = (z / 1000) * 200 + 100;
+                    mapCtx.fillStyle = color;
+                    mapCtx.beginPath(); mapCtx.arc(px, pz, 3, 0, Math.PI*2); mapCtx.fill();
+                };
+                drawDot(playerCar.position.x, playerCar.position.z, '#0ff'); // You
+                Object.values(otherPlayers).forEach(p => drawDot(p.position.x, p.position.z, '#f0f')); // Players
+                Object.values(botCars).forEach(b => drawDot(b.position.x, b.position.z, '#f00')); // Bots
             }
             composer.render();
         }
