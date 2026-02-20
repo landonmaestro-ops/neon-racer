@@ -1,14 +1,18 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Neon Hunter: Mortality</title>
+    <title>Neon Hunter Arena</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: monospace; }
-        #ui { position: absolute; top: 20px; left: 20px; color: #fff; z-index: 10; pointer-events: none; }
+        #ui { position: absolute; top: 20px; left: 20px; color: #fff; pointer-events: none; z-index: 10; }
+        .red { color: #ff4444; } .blue { color: #4444ff; }
     </style>
 </head>
 <body>
-    <div id="ui"><h1>NEON HUNTER</h1><div id="t-info">CONNECTING...</div></div>
+    <div id="ui">
+        <h2 id="team-display">JOINING...</h2>
+        <div>SCORE: <span class="red" id="sr">0</span> | <span class="blue" id="sb">0</span></div>
+    </div>
     <script src="/socket.io/socket.io.js"></script>
     <script type="importmap">{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }</script>
 
@@ -29,105 +33,85 @@
         composer.addPass(new RenderPass(scene, camera));
         composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85));
 
+        // Arena Setup
         const buildings = [{x:60,z:60,w:40,d:40,h:50},{x:-80,z:-30,w:50,d:30,h:80},{x:30,z:-120,w:30,d:60,h:40},{x:120,z:90,w:40,d:40,h:60}];
         buildings.forEach(b => {
-            const m = new THREE.Mesh(new THREE.BoxGeometry(b.w, b.h, b.d), new THREE.MeshStandardMaterial({color:0x050505}));
-            m.position.set(b.x, b.h/2, b.z); scene.add(m);
-            const l = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry), new THREE.LineBasicMaterial({color:0x00ffff}));
-            l.position.copy(m.position); scene.add(l);
+            const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.w, b.h, b.d), new THREE.MeshStandardMaterial({color: 0x0a0a0a}));
+            mesh.position.set(b.x, b.h/2, b.z); scene.add(mesh);
+            const edge = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry), new THREE.LineBasicMaterial({color: 0x00ffff}));
+            edge.position.copy(mesh.position); scene.add(edge);
         });
 
-        let playerCar, playerTeam, speed = 0, ghostTimer = 0, playerHealth = 2;
+        const zoneRed = new THREE.Mesh(new THREE.BoxGeometry(30,1,30), new THREE.MeshBasicMaterial({color:0xff0000, transparent:true, opacity:0.2}));
+        const zoneBlue = new THREE.Mesh(new THREE.BoxGeometry(30,1,30), new THREE.MeshBasicMaterial({color:0x0000ff, transparent:true, opacity:0.2}));
+        scene.add(zoneRed, zoneBlue, new THREE.GridHelper(400, 20, 0x222222, 0x111111));
+
+        let playerCar, playerTeam, speed = 0, ghostTimer = 0;
         const otherPlayers = {}, botCars = {}, projectiles = [], particles = [];
 
-        function createCar(team, isLocal = false) {
+        function createCar(team) {
             const color = (team === 'red') ? 0xff0000 : 0x0066ff;
             const group = new THREE.Group();
-            const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 3), new THREE.MeshStandardMaterial({color, emissive:color, emissiveIntensity:1.5}));
+            const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.6, 3), new THREE.MeshStandardMaterial({color, emissive:color, emissiveIntensity:1}));
             body.position.y = 0.5; group.add(body);
             
-            const hp = new THREE.Mesh(new THREE.PlaneGeometry(2, 0.2), new THREE.MeshBasicMaterial({color:0x00ff00, side:THREE.DoubleSide}));
+            const hp = new THREE.Mesh(new THREE.PlaneGeometry(2, 0.2), new THREE.MeshBasicMaterial({color: 0x00ff00, side: THREE.DoubleSide}));
             hp.position.y = 2.5; hp.name = "hpBar"; group.add(hp);
 
-            // NEON SHIELD MESH
-            const shieldGeo = new THREE.IcosahedronGeometry(2.5, 1);
-            const shieldMat = new THREE.MeshBasicMaterial({color: 0x00ffff, wireframe: true, transparent: true, opacity: 0});
-            const shield = new THREE.Mesh(shieldGeo, shieldMat);
-            shield.name = "shield"; shield.position.y = 0.5;
-            group.add(shield);
-
+            const shield = new THREE.Mesh(new THREE.IcosahedronGeometry(2.5, 1), new THREE.MeshBasicMaterial({color: 0x00ffff, wireframe: true, transparent: true, opacity: 0}));
+            shield.name = "shield"; shield.position.y = 0.5; group.add(shield);
             return group;
         }
 
         socket.on('currentPlayers', (ps) => {
             Object.keys(ps).forEach(id => {
-                if(id === socket.id) { 
-                    playerTeam = ps[id].team; playerCar = createCar(playerTeam, true); scene.add(playerCar); 
-                    document.getElementById('t-info').innerText = "TEAM: " + playerTeam.toUpperCase();
-                } else { otherPlayers[id] = createCar(ps[id].team); otherPlayers[id].team = ps[id].team; scene.add(otherPlayers[id]); }
+                if(id === socket.id) {
+                    playerTeam = ps[id].team; playerCar = createCar(playerTeam); scene.add(playerCar);
+                    document.getElementById('team-display').innerText = `TEAM ${playerTeam.toUpperCase()}`;
+                    document.getElementById('team-display').className = playerTeam;
+                } else {
+                    otherPlayers[id] = createCar(ps[id].team); otherPlayers[id].team = ps[id].team; scene.add(otherPlayers[id]);
+                }
             });
-        });
-
-        socket.on('playerReset', (d) => {
-            if(d.id === socket.id) {
-                playerCar.position.set(d.x, 0, d.z); speed = 0; ghostTimer = 120; playerHealth = 2;
-            }
-        });
-
-        socket.on('healthUpdate', (d) => {
-            const target = d.id === socket.id ? playerCar : (otherPlayers[d.id] || botCars[d.id]);
-            if(target) {
-                const bar = target.getObjectByName("hpBar");
-                bar.scale.x = d.health / 2;
-                if(d.id === socket.id) playerHealth = d.health;
-            }
         });
 
         socket.on('botUpdate', (bs) => {
             Object.keys(bs).forEach(id => {
                 if(!botCars[id]) { botCars[id] = createCar(bs[id].team); botCars[id].team = bs[id].team; scene.add(botCars[id]); }
                 botCars[id].position.set(bs[id].x, 0, bs[id].z); botCars[id].rotation.y = bs[id].rot;
+                botCars[id].getObjectByName("hpBar").scale.x = bs[id].health / 2;
             });
         });
 
-        socket.on('projectileSpawned', (p) => {
-            const m = new THREE.Mesh(new THREE.SphereGeometry(0.4), new THREE.MeshBasicMaterial({color:0xffffff}));
-            m.position.set(p.x, 0.5, p.z); scene.add(m);
-            // Life is a frames count to prevent self-collision on spawn
-            projectiles.push({ mesh: m, vx: Math.sin(p.rot)*2.2, vz: Math.cos(p.rot)*2.2, owner: p.owner, team: p.team, bounces: 0, life: 0 });
+        socket.on('playerReset', (d) => { if(d.id === socket.id) { playerCar.position.set(d.x, 0, d.z); speed = 0; ghostTimer = 100; } });
+        socket.on('healthUpdate', (d) => {
+            const c = d.id === socket.id ? playerCar : (otherPlayers[d.id] || botCars[d.id]);
+            if(c) c.getObjectByName("hpBar").scale.x = d.health / 2;
         });
-
-        socket.on('explosion', (d) => {
-            for(let i=0; i<15; i++) {
-                const p = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), new THREE.MeshBasicMaterial({color:d.color}));
-                p.position.set(d.x, 0.5, d.z); scene.add(p);
-                particles.push({m:p, v:new THREE.Vector3((Math.random()-0.5)*0.5, 0.5, (Math.random()-0.5)*0.5), t:40});
-            }
+        socket.on('zonesUpdate', (z) => { zoneRed.position.set(z.red.x, 0, z.red.z); zoneBlue.position.set(z.blue.x, 0, z.blue.z); });
+        socket.on('scoreUpdate', (s) => { document.getElementById('sr').innerText = s.red; document.getElementById('sb').innerText = s.blue; });
+        socket.on('projectileSpawned', (p) => {
+            const m = new THREE.Mesh(new THREE.SphereGeometry(0.5), new THREE.MeshBasicMaterial({color: 0xffffff}));
+            m.position.set(p.x, 0.5, p.z); scene.add(m);
+            projectiles.push({ mesh: m, vx: Math.sin(p.rot)*2, vz: Math.cos(p.rot)*2, owner: p.owner, team: p.team, bounces: 0, life: 0 });
         });
 
         const keys = {};
         window.onkeydown = (e) => keys[e.code] = true; window.onkeyup = (e) => keys[e.code] = false;
-        window.onmousedown = () => {
-            if(playerCar && ghostTimer <= 0) {
-                socket.emit('shoot', {x: playerCar.position.x, z: playerCar.position.z, rot: playerCar.rotation.y, owner: socket.id, team: playerTeam});
-            }
-        };
+        window.onmousedown = () => { if(playerCar && ghostTimer <= 0) socket.emit('shoot', {x: playerCar.position.x, z: playerCar.position.z, rot: playerCar.rotation.y, owner: socket.id, team: playerTeam}); };
 
         function animate() {
             requestAnimationFrame(animate);
             if (playerCar) {
-                // Ghost/Shield Logic
-                const shield = playerCar.getObjectByName("shield");
+                const s = playerCar.getObjectByName("shield");
                 if(ghostTimer > 0) {
-                    ghostTimer--;
-                    shield.material.opacity = Math.sin(Date.now()*0.01)*0.3 + 0.4;
-                    shield.rotation.y += 0.05;
-                } else { shield.material.opacity = 0; }
+                    ghostTimer--; s.material.opacity = Math.sin(Date.now()*0.01)*0.3 + 0.3; s.rotation.y += 0.05;
+                } else { s.material.opacity = 0; }
 
-                if(keys['KeyW']) speed += 0.009; if(keys['KeyS']) speed -= 0.01;
+                if(keys['KeyW']) speed += 0.008; if(keys['KeyS']) speed -= 0.008;
                 speed *= 0.96;
                 if(keys['KeyA']) playerCar.rotation.y += 0.04; if(keys['KeyD']) playerCar.rotation.y -= 0.04;
-                
+
                 let nx = playerCar.position.x + Math.sin(playerCar.rotation.y) * speed;
                 let nz = playerCar.position.z + Math.cos(playerCar.rotation.y) * speed;
 
@@ -136,46 +120,40 @@
 
                 if(!hitWall && !hitCar) { playerCar.position.x = nx; playerCar.position.z = nz; } else { speed *= -0.5; }
                 socket.emit('playerMovement', {x: playerCar.position.x, z: playerCar.position.z, rot: playerCar.rotation.y});
-                camera.position.lerp(new THREE.Vector3(0, 12, -20).applyMatrix4(playerCar.matrixWorld), 0.1); camera.lookAt(playerCar.position);
+                camera.position.lerp(new THREE.Vector3(0, 15, -20).applyMatrix4(playerCar.matrixWorld), 0.1); camera.lookAt(playerCar.position);
 
-                // Projectiles
-                for(let i=projectiles.length-1; i>=0; i--) {
+                for(let i = projectiles.length-1; i >= 0; i--) {
                     const p = projectiles[i]; p.life++;
                     p.mesh.position.x += p.vx; p.mesh.position.z += p.vz;
                     
-                    // Bounce
                     buildings.forEach(b => {
                         if(p.mesh.position.x > b.x-b.w/2 && p.mesh.position.x < b.x+b.w/2 && p.mesh.position.z > b.z-b.d/2 && p.mesh.position.z < b.z+b.d/2) {
                             p.vx *= -1; p.vz *= -1; p.bounces++;
                         }
                     });
 
-                    // KILL LOGIC: Only the owner checks for hits to avoid double-counting
-                    if(p.owner === socket.id) {
-                        const targets = [...Object.entries(otherPlayers), ...Object.entries(botCars)];
-                        targets.forEach(([id, c]) => {
-                            if(p.mesh.position.distanceTo(c.position) < 2.5 && c.team !== p.team) {
-                                socket.emit('hit', {id, type: id.startsWith('bot') ? 'bot' : 'player', attackerTeam: p.team, impactX: p.mesh.position.x, impactZ: p.mesh.position.z});
-                                scene.remove(p.mesh); projectiles.splice(i,1);
+                    // LOCAL DAMAGE CHECK: Every player checks if THEY get hit by an enemy shot
+                    if (p.team !== playerTeam && ghostTimer <= 0) {
+                        if (p.mesh.position.distanceTo(playerCar.position) < 2.5) {
+                            socket.emit('hit', {id: socket.id, type: 'player', x: p.mesh.position.x, z: p.mesh.position.z});
+                            scene.remove(p.mesh); projectiles.splice(i, 1);
+                            continue;
+                        }
+                    }
+
+                    // BOT DAMAGE CHECK: Done by the projectile owner to keep it simple
+                    if (p.owner === socket.id) {
+                        Object.entries(botCars).forEach(([id, bot]) => {
+                            if (p.mesh.position.distanceTo(bot.position) < 2.5 && bot.team !== p.team) {
+                                socket.emit('hit', {id, type: 'bot', x: p.mesh.position.x, z: p.mesh.position.z});
+                                scene.remove(p.mesh); projectiles.splice(i, 1);
                             }
                         });
                     }
 
-                    // LOCAL MORTALITY: Every client checks if an ENEMY projectile hits THEM
-                    if(p.owner !== socket.id && p.team !== playerTeam && ghostTimer <= 0) {
-                        if(p.mesh.position.distanceTo(playerCar.position) < 2) {
-                            socket.emit('hit', {id: socket.id, type: 'player', attackerTeam: p.team, impactX: p.mesh.position.x, impactZ: p.mesh.position.z});
-                            scene.remove(p.mesh); projectiles.splice(i,1);
-                        }
-                    }
-
-                    if(p.mesh && (p.life > 200 || p.bounces > 4)) { scene.remove(p.mesh); projectiles.splice(i, 1); }
+                    if(p.life > 150 || p.bounces > 4) { scene.remove(p.mesh); projectiles.splice(i, 1); }
                 }
-
-                for(let i=particles.length-1; i>=0; i--){
-                    particles[i].m.position.add(particles[i].v); particles[i].t--;
-                    if(particles[i].t <= 0){ scene.remove(particles[i].m); particles.splice(i,1); }
-                }
+                [playerCar, ...Object.values(otherPlayers), ...Object.values(botCars)].forEach(c => c.getObjectByName("hpBar").lookAt(camera.position));
             }
             composer.render();
         }
