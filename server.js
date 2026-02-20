@@ -4,9 +4,11 @@ const { Server } = require('socket.io');
 const path = require('path');
 
 const app = express();
+
+// Create HTTP server first
 const server = http.createServer(app);
 
-// Create Socket.IO server attached to HTTP server
+// Attach Socket.IO to server BEFORE anything else
 const io = new Server(server, {
   pingInterval: 1000,
   pingTimeout: 5000,
@@ -16,7 +18,7 @@ const io = new Server(server, {
   }
 });
 
-// Serve static files from public directory
+// NOW serve static files (after Socket.IO is attached)
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- GAME CONFIGURATION ---
@@ -104,7 +106,6 @@ class BotAI {
       return;
     }
 
-    // Find nearest target
     let nearest = null;
     let nearestDist = Infinity;
     
@@ -733,7 +734,8 @@ function checkHitscanCollision(origin, dir, targetPos) {
 
 initBots();
 
+// START SERVER LISTENING AT THE END
 server.listen(3000, () => {
   console.log('Server listening on *:3000');
-  console.log('Socket.IO should be available at /socket.io/socket.io.js');
+  console.log('Socket.IO client available at: http://localhost:3000/socket.io/socket.io.js');
 });
