@@ -1,46 +1,24 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Neon Racer: Bot City</title>
+    <title>Neon Racer: Collision City</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: monospace; }
         #ui { position: absolute; top: 20px; left: 20px; color: #0ff; z-index: 10; pointer-events: none; }
-        
-        /* Minimap Styling */
-        #minimap {
-            position: absolute; top: 20px; right: 20px;
-            width: 200px; height: 200px;
-            background: rgba(0, 0, 0, 0.8);
-            border: 2px solid #0ff;
-            border-radius: 10px; z-index: 30;
-        }
-
-        #chat-container {
-            position: absolute; bottom: 20px; left: 20px; width: 300px;
-            background: rgba(0, 0, 0, 0.8); border: 2px solid #0ff; padding: 10px; z-index: 20;
-        }
+        #minimap { position: absolute; top: 20px; right: 20px; width: 200px; height: 200px; background: rgba(0,0,0,0.8); border: 2px solid #0ff; border-radius: 10px; z-index: 30; }
+        #chat-container { position: absolute; bottom: 20px; left: 20px; width: 300px; background: rgba(0,0,0,0.8); border: 2px solid #0ff; padding: 10px; z-index: 20; }
         #messages { height: 100px; overflow-y: auto; color: #0ff; margin-bottom: 10px; font-size: 12px; }
         #chat-input { width: 92%; background: #000; border: 1px solid #0ff; color: #fff; padding: 5px; outline: none; }
     </style>
 </head>
 <body>
 
-    <div id="ui">
-        <h1>NEON RACER</h1>
-        <p>SPACE: Nitro | SCANNING AREA...</p>
-    </div>
-
+    <div id="ui"><h1>NEON RACER</h1><p>SPACE: Nitro | Avoid the Towers</p></div>
     <canvas id="minimap"></canvas>
-
-    <div id="chat-container">
-        <div id="messages"></div>
-        <input type="text" id="chat-input" placeholder="Press Enter to chat...">
-    </div>
+    <div id="chat-container"><div id="messages"></div><input type="text" id="chat-input" placeholder="Type here..."></div>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script type="importmap">
-        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }
-    </script>
+    <script type="importmap">{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }</script>
 
     <script type="module">
         import * as THREE from 'three';
@@ -50,7 +28,7 @@
 
         const socket = io();
         const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 2000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
@@ -59,18 +37,25 @@
         composer.addPass(new RenderPass(scene, camera));
         composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85));
 
-        // Minimap Setup
         const mapCanvas = document.getElementById('minimap');
         const mapCtx = mapCanvas.getContext('2d');
         mapCanvas.width = 200; mapCanvas.height = 200;
 
-        // Environment
-        scene.add(new THREE.GridHelper(1000, 50, 0xff00ff, 0x222222));
-        for(let i = 0; i < 50; i++) {
-            const h = 60 + Math.random() * 120;
-            const b = new THREE.Mesh(new THREE.BoxGeometry(15, h, 15), new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0x00ffff, emissiveIntensity: 0.5 }));
-            b.position.set((Math.random()-0.5)*800, h/2, (Math.random()-0.5)*800);
+        const neonColors = [0x00ffff, 0xff00ff, 0xffff00, 0x00ff00, 0xff0000, 0xffa500];
+        const obstacles = [];
+
+        // Build Skyscrapers
+        scene.add(new THREE.GridHelper(1000, 50, 0x444444, 0x222222));
+        for(let i = 0; i < 60; i++) {
+            const h = 80 + Math.random() * 150;
+            const w = 15 + Math.random() * 10;
+            const color = neonColors[Math.floor(Math.random() * neonColors.length)];
+            const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), new THREE.MeshStandardMaterial({ color: 0x111111, emissive: color, emissiveIntensity: 1 }));
+            const x = (Math.random()-0.5)*850;
+            const z = (Math.random()-0.5)*850;
+            b.position.set(x, h/2, z);
             scene.add(b);
+            obstacles.push({ x, z, size: w/2 + 1.5 }); // Store hitboxes
         }
 
         let playerCar;
@@ -78,75 +63,42 @@
         const botCars = {};
 
         function createCar(color) {
-            const group = new THREE.Group();
-            const body = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.6, 3), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 2 }));
-            body.position.y = 0.3;
-            group.add(body);
-            return group;
+            const g = new THREE.Group();
+            const b = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.6, 3), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 2 }));
+            b.position.y = 0.3; g.add(b); return g;
         }
 
-        // Network Events
-        socket.on('currentPlayers', (players) => {
-            Object.keys(players).forEach(id => {
-                if (id === socket.id) {
-                    playerCar = createCar(0x00ffff);
-                    scene.add(playerCar);
-                } else {
-                    otherPlayers[id] = createCar(0xff00ff);
-                    scene.add(otherPlayers[id]);
-                }
+        socket.on('currentPlayers', (ps) => {
+            Object.keys(ps).forEach(id => {
+                if(id === socket.id) { playerCar = createCar(0x00ffff); scene.add(playerCar); }
+                else { otherPlayers[id] = createCar(0xff00ff); scene.add(otherPlayers[id]); }
             });
         });
 
-        socket.on('newPlayer', (data) => {
-            otherPlayers[data.id] = createCar(0xff00ff);
-            scene.add(otherPlayers[data.id]);
-        });
-
-        socket.on('playerMoved', (data) => {
-            if (otherPlayers[data.id]) {
-                otherPlayers[data.id].position.set(data.info.x, 0, data.info.z);
-                otherPlayers[data.id].rotation.y = data.info.rot;
-            }
-        });
-
-        socket.on('botUpdate', (bots) => {
-            Object.keys(bots).forEach(id => {
-                if (!botCars[id]) {
-                    botCars[id] = createCar(0xff0000);
-                    scene.add(botCars[id]);
-                }
-                botCars[id].position.set(bots[id].x, 0, bots[id].z);
-                botCars[id].rotation.y = bots[id].rot;
+        socket.on('botUpdate', (bs) => {
+            Object.keys(bs).forEach(id => {
+                if(!botCars[id]) { botCars[id] = createCar(bs[id].color); scene.add(botCars[id]); }
+                botCars[id].position.set(bs[id].x, 0, bs[id].z);
+                botCars[id].rotation.y = bs[id].rot;
             });
         });
 
-        socket.on('botRemoved', (id) => {
-            if (botCars[id]) { scene.remove(botCars[id]); delete botCars[id]; }
-        });
+        socket.on('botRemoved', (id) => { if(botCars[id]) { scene.remove(botCars[id]); delete botCars[id]; }});
+        socket.on('playerMoved', (d) => { if(otherPlayers[d.id]) { otherPlayers[d.id].position.set(d.info.x, 0, d.info.z); otherPlayers[d.id].rotation.y = d.info.rot; }});
+        socket.on('playerDisconnected', (id) => { if(otherPlayers[id]) { scene.remove(otherPlayers[id]); delete otherPlayers[id]; }});
 
-        socket.on('playerDisconnected', (id) => {
-            if (otherPlayers[id]) { scene.remove(otherPlayers[id]); delete otherPlayers[id]; }
-        });
-
-        // Chat
         const chatInput = document.getElementById('chat-input');
         chatInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && chatInput.value.trim() !== '') {
-                socket.emit('chatMessage', chatInput.value);
-                chatInput.value = '';
-                chatInput.blur();
+                socket.emit('chatMessage', chatInput.value); chatInput.value = ''; chatInput.blur();
             }
         });
-
-        socket.on('chatMessage', (data) => {
-            const m = document.createElement('div');
-            m.innerHTML = `<b>${data.id.substring(0, 4)}:</b> ${data.msg}`;
+        socket.on('chatMessage', (d) => {
+            const m = document.createElement('div'); m.innerHTML = `<b>${d.id.substring(0,4)}:</b> ${d.msg}`;
             document.getElementById('messages').appendChild(m);
             document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
         });
 
-        // Controls & Loop
         const keys = {};
         window.onkeydown = (e) => { if(document.activeElement !== chatInput) keys[e.code] = true; };
         window.onkeyup = (e) => keys[e.code] = false;
@@ -156,41 +108,56 @@
             requestAnimationFrame(animate);
             if (playerCar) {
                 const isNitro = keys['Space'];
-                const accel = isNitro ? 0.015 : 0.005;
+                const accel = isNitro ? 0.018 : 0.006;
                 if (keys['KeyW']) speed += accel;
                 if (keys['KeyS']) speed -= accel;
-                speed *= 0.96;
-                playerCar.translateZ(speed);
+                speed *= 0.95;
+
+                // Collision Logic
+                const nextX = playerCar.position.x + Math.sin(playerCar.rotation.y) * speed;
+                const nextZ = playerCar.position.z + Math.cos(playerCar.rotation.y) * speed;
+                
+                let hit = false;
+                for(let obs of obstacles) {
+                    const dx = nextX - obs.x;
+                    const dz = nextZ - obs.z;
+                    if(Math.sqrt(dx*dx + dz*dz) < obs.size) { hit = true; break; }
+                }
+
+                if(!hit) {
+                    playerCar.translateZ(speed);
+                } else {
+                    speed = -speed * 0.5; // Bounce
+                }
+
                 if (keys['KeyA']) playerCar.rotation.y += 0.04;
                 if (keys['KeyD']) playerCar.rotation.y -= 0.04;
 
                 socket.emit('playerMovement', { x: playerCar.position.x, z: playerCar.position.z, rot: playerCar.rotation.y });
 
-                camera.fov = THREE.MathUtils.lerp(camera.fov, isNitro ? 85 : 75, 0.1);
+                camera.fov = THREE.MathUtils.lerp(camera.fov, isNitro ? 88 : 75, 0.1);
                 camera.updateProjectionMatrix();
                 const offset = new THREE.Vector3(0, 6, -12).applyMatrix4(playerCar.matrixWorld);
                 camera.position.lerp(offset, 0.1);
                 camera.lookAt(playerCar.position);
 
-                // Draw Minimap
-                mapCtx.clearRect(0, 0, 200, 200);
+                // Minimap (Player Cyan, Others/Bots Pink)
+                mapCtx.clearRect(0,0,200,200);
                 const drawDot = (x, z, color) => {
                     const px = (x / 1000) * 200 + 100;
                     const pz = (z / 1000) * 200 + 100;
-                    mapCtx.fillStyle = color;
-                    mapCtx.beginPath(); mapCtx.arc(px, pz, 3, 0, Math.PI*2); mapCtx.fill();
+                    mapCtx.fillStyle = color; mapCtx.beginPath(); mapCtx.arc(px, pz, 3, 0, Math.PI*2); mapCtx.fill();
                 };
-                drawDot(playerCar.position.x, playerCar.position.z, '#0ff'); // You
-                Object.values(otherPlayers).forEach(p => drawDot(p.position.x, p.position.z, '#f0f')); // Players
-                Object.values(botCars).forEach(b => drawDot(b.position.x, b.position.z, '#f00')); // Bots
+                drawDot(playerCar.position.x, playerCar.position.z, '#0ff');
+                Object.values(otherPlayers).forEach(p => drawDot(p.position.x, p.position.z, '#f0f'));
+                Object.values(botCars).forEach(b => drawDot(b.position.x, b.position.z, '#f0f'));
             }
             composer.render();
         }
         animate();
 
         window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
+            camera.aspect = window.innerWidth/window.innerHeight; camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
     </script>
