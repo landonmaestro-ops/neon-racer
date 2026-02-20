@@ -1,18 +1,14 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Neon Hunter: Arena Physics</title>
+    <title>Neon Hunter: Final Combat</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: monospace; }
-        #ui { position: absolute; top: 20px; left: 20px; color: #fff; pointer-events: none; z-index: 10; }
-        .red { color: #ff4444; } .blue { color: #4444ff; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', monospace; }
+        #ui { position: absolute; top: 20px; left: 20px; color: #fff; pointer-events: none; z-index: 10; text-shadow: 0 0 5px #0ff; }
     </style>
 </head>
 <body>
-    <div id="ui">
-        <h2 id="team-display">ARENA ACTIVE</h2>
-        <div>SCORE: <span class="red" id="sr">0</span> | <span class="blue" id="sb">0</span></div>
-    </div>
+    <div id="ui"><h2 id="team-display">SYNCING...</h2></div>
     <script src="/socket.io/socket.io.js"></script>
     <script type="importmap">{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }</script>
 
@@ -35,15 +31,11 @@
 
         const buildings = [{x:60,z:60,w:40,d:40,h:50},{x:-80,z:-30,w:50,d:30,h:80},{x:30,z:-120,w:30,d:60,h:40},{x:120,z:90,w:40,d:40,h:60}];
         buildings.forEach(b => {
-            const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.w, b.h, b.d), new THREE.MeshStandardMaterial({color: 0x050505}));
+            const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.w, b.h, b.d), new THREE.MeshStandardMaterial({color: 0x020202}));
             mesh.position.set(b.x, b.h/2, b.z); scene.add(mesh);
             const edge = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry), new THREE.LineBasicMaterial({color: 0x00ffff}));
             edge.position.copy(mesh.position); scene.add(edge);
         });
-
-        const zoneRed = new THREE.Mesh(new THREE.BoxGeometry(30,1,30), new THREE.MeshBasicMaterial({color:0xff0000, transparent:true, opacity:0.2}));
-        const zoneBlue = new THREE.Mesh(new THREE.BoxGeometry(30,1,30), new THREE.MeshBasicMaterial({color:0x0000ff, transparent:true, opacity:0.2}));
-        scene.add(zoneRed, zoneBlue, new THREE.GridHelper(400, 20, 0x222222, 0x111111));
 
         let playerCar, playerTeam, speed = 0, ghostTimer = 0;
         const otherPlayers = {}, botCars = {}, projectiles = [];
@@ -51,7 +43,7 @@
         function createCar(team) {
             const color = (team === 'red') ? 0xff0000 : 0x0066ff;
             const group = new THREE.Group();
-            const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.6, 3), new THREE.MeshStandardMaterial({color, emissive:color, emissiveIntensity:1}));
+            const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.6, 3), new THREE.MeshStandardMaterial({color, emissive:color, emissiveIntensity:1.2}));
             body.position.y = 0.5; group.add(body);
             const hp = new THREE.Mesh(new THREE.PlaneGeometry(2, 0.2), new THREE.MeshBasicMaterial({color: 0x00ff00, side: THREE.DoubleSide}));
             hp.position.y = 2.5; hp.name = "hpBar"; group.add(hp);
@@ -65,7 +57,7 @@
                 if(id === socket.id) {
                     playerTeam = ps[id].team; playerCar = createCar(playerTeam); scene.add(playerCar);
                     document.getElementById('team-display').innerText = `TEAM ${playerTeam.toUpperCase()}`;
-                    document.getElementById('team-display').className = playerTeam;
+                    document.getElementById('team-display').style.color = playerTeam === 'red' ? '#ff4444' : '#4444ff';
                 } else {
                     otherPlayers[id] = createCar(ps[id].team); otherPlayers[id].team = ps[id].team; scene.add(otherPlayers[id]);
                 }
@@ -76,21 +68,19 @@
             Object.keys(bs).forEach(id => {
                 if(!botCars[id]) { botCars[id] = createCar(bs[id].team); botCars[id].team = bs[id].team; scene.add(botCars[id]); }
                 botCars[id].position.set(bs[id].x, 0, bs[id].z); botCars[id].rotation.y = bs[id].rot;
-                botCars[id].getObjectByName("hpBar").scale.x = bs[id].health / 2;
+                botCars[id].getObjectByName("hpBar").scale.x = Math.max(0.01, bs[id].health / 2);
             });
         });
 
         socket.on('playerReset', (d) => { if(d.id === socket.id) { playerCar.position.set(d.x, 0, d.z); speed = 0; ghostTimer = 100; } });
         socket.on('healthUpdate', (d) => {
             const c = d.id === socket.id ? playerCar : (otherPlayers[d.id] || botCars[d.id]);
-            if(c) c.getObjectByName("hpBar").scale.x = d.health / 2;
+            if(c) c.getObjectByName("hpBar").scale.x = Math.max(0.01, d.health / 2);
         });
-        socket.on('zonesUpdate', (z) => { zoneRed.position.set(z.red.x, 0, z.red.z); zoneBlue.position.set(z.blue.x, 0, z.blue.z); });
-        socket.on('scoreUpdate', (s) => { document.getElementById('sr').innerText = s.red; document.getElementById('sb').innerText = s.blue; });
         socket.on('projectileSpawned', (p) => {
             const m = new THREE.Mesh(new THREE.SphereGeometry(0.5), new THREE.MeshBasicMaterial({color: 0xffffff}));
             m.position.set(p.x, 0.5, p.z); scene.add(m);
-            projectiles.push({ mesh: m, vx: Math.sin(p.rot)*2, vz: Math.cos(p.rot)*2, owner: p.owner, team: p.team, bounces: 0, life: 0 });
+            projectiles.push({ mesh: m, vx: Math.sin(p.rot)*2.5, vz: Math.cos(p.rot)*2.5, owner: p.owner, team: p.team, life: 0 });
         });
 
         const keys = {};
@@ -105,67 +95,46 @@
                     ghostTimer--; s.material.opacity = 0.4; s.rotation.y += 0.05;
                 } else { s.material.opacity = 0; }
 
-                // --- NITRO BOOST RESTORED ---
-                let accel = 0.008;
-                if(keys['Space']) accel = 0.025; // Nitro value
+                // Speed & FOV Juice
+                let accel = keys['Space'] ? 0.025 : 0.009;
+                camera.fov += ((keys['Space'] ? 85 : 75) - camera.fov) * 0.1;
+                camera.updateProjectionMatrix();
 
                 if(keys['KeyW']) speed += accel; 
                 if(keys['KeyS']) speed -= accel;
-                speed *= 0.96;
-                if(keys['KeyA']) playerCar.rotation.y += 0.045; 
-                if(keys['KeyD']) playerCar.rotation.y -= 0.045;
+                speed *= 0.95;
+                if(keys['KeyA']) playerCar.rotation.y += 0.05; 
+                if(keys['KeyD']) playerCar.rotation.y -= 0.05;
 
                 let nx = playerCar.position.x + Math.sin(playerCar.rotation.y) * speed;
                 let nz = playerCar.position.z + Math.cos(playerCar.rotation.y) * speed;
 
-                // Wall Collision
-                const hitWall = buildings.some(b => nx > b.x-b.w/2-1 && nx < b.x+b.w/2+1 && nz > b.z-b.d/2-1 && nz < b.z+b.d/2+1);
-                
-                // --- BOUNCE PHYSICS ---
-                let bounceX = 0, bounceZ = 0;
+                // Collisions
+                let bX = 0, bZ = 0;
                 if(ghostTimer <= 0) {
                     [...Object.values(otherPlayers), ...Object.values(botCars)].forEach(c => {
-                        const dist = new THREE.Vector3(nx, 0, nz).distanceTo(c.position);
-                        if(dist < 2.8) {
-                            // Calculate bounce vector
-                            bounceX = (nx - c.position.x) * 0.5;
-                            bounceZ = (nz - c.position.z) * 0.5;
-                            speed *= -0.5; // Reverse speed on impact
+                        if(playerCar.position.distanceTo(c.position) < 2.8) {
+                            bX = (playerCar.position.x - c.position.x) * 0.4;
+                            bZ = (playerCar.position.z - c.position.z) * 0.4;
+                            speed *= -0.8;
                         }
                     });
                 }
 
-                if(!hitWall) { 
-                    playerCar.position.x = nx + bounceX; 
-                    playerCar.position.z = nz + bounceZ; 
-                } else { 
-                    speed *= -0.6; 
-                }
+                const hitWall = buildings.some(b => nx > b.x-b.w/2-1 && nx < b.x+b.w/2+1 && nz > b.z-b.d/2-1 && nz < b.z+b.d/2+1);
+                if(!hitWall) { playerCar.position.x = nx + bX; playerCar.position.z = nz + bZ; } else { speed *= -0.5; }
 
                 socket.emit('playerMovement', {x: playerCar.position.x, z: playerCar.position.z, rot: playerCar.rotation.y});
-                camera.position.lerp(new THREE.Vector3(0, 15, -20).applyMatrix4(playerCar.matrixWorld), 0.1); camera.lookAt(playerCar.position);
+                camera.position.lerp(new THREE.Vector3(0, 15, -22).applyMatrix4(playerCar.matrixWorld), 0.1); camera.lookAt(playerCar.position);
 
-                // Projectile Logic (Mortality Included)
                 for(let i = projectiles.length-1; i >= 0; i--) {
                     const p = projectiles[i]; p.life++;
                     p.mesh.position.x += p.vx; p.mesh.position.z += p.vz;
                     
-                    buildings.forEach(b => {
-                        if(p.mesh.position.x > b.x-b.w/2 && p.mesh.position.x < b.x+b.w/2 && p.mesh.position.z > b.z-b.d/2 && p.mesh.position.z < b.z+b.d/2) {
-                            p.vx *= -1; p.vz *= -1; p.bounces++;
-                        }
-                    });
-
-                    // Player mortality check
-                    if (p.team !== playerTeam && ghostTimer <= 0) {
-                        if (p.mesh.position.distanceTo(playerCar.position) < 2.5) {
-                            socket.emit('hit', {id: socket.id, type: 'player', x: p.mesh.position.x, z: p.mesh.position.z});
-                            scene.remove(p.mesh); projectiles.splice(i, 1);
-                            continue;
-                        }
+                    if (p.team !== playerTeam && ghostTimer <= 0 && p.mesh.position.distanceTo(playerCar.position) < 2.5) {
+                        socket.emit('hit', {id: socket.id, type: 'player', x: p.mesh.position.x, z: p.mesh.position.z});
+                        scene.remove(p.mesh); projectiles.splice(i, 1); continue;
                     }
-
-                    // Bot damage check
                     if (p.owner === socket.id) {
                         Object.entries(botCars).forEach(([id, bot]) => {
                             if (p.mesh.position.distanceTo(bot.position) < 2.5 && bot.team !== p.team) {
@@ -174,8 +143,7 @@
                             }
                         });
                     }
-
-                    if(p.life > 150 || p.bounces > 4) { scene.remove(p.mesh); projectiles.splice(i, 1); }
+                    if(p.life > 100) { scene.remove(p.mesh); projectiles.splice(i, 1); }
                 }
                 [playerCar, ...Object.values(otherPlayers), ...Object.values(botCars)].forEach(c => c.getObjectByName("hpBar").lookAt(camera.position));
             }
