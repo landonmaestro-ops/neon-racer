@@ -21,6 +21,10 @@ const buildings = [
 
 let zones = { red: { x: 350, z: 0 }, blue: { x: -350, z: 0 } };
 
+function isOverBuilding(x, z) {
+    return buildings.some(b => x > b.x - (b.w/2 + 20) && x < b.x + (b.w/2 + 20) && z > b.z - (b.d/2 + 20) && z < b.z + (b.d/2 + 20));
+}
+
 function rotateZones() {
     const distance = 350;
     let rx, rz, bx, bz, found = false;
@@ -34,40 +38,96 @@ function rotateZones() {
     io.emit('zonesUpdate', zones);
 }
 
-function isOverBuilding(x, z) {
-    return buildings.some(b => x > b.x-b.w/2-20 && x < b.x+b.w/2+20 && z > b.z-b.d/2-20 && z < b.z+b.d/2+20);
-}
-
 setInterval(() => {
     zoneTimer--;
     if (zoneTimer <= 0) { rotateZones(); zoneTimer = 240; }
     io.emit('timerUpdate', zoneTimer);
 }, 1000);
 
-// Scoring & Team Balancing
+// Strict Team Balancing & Bot Refill
 function updateBots() {
     const pIds = Object.keys(players);
     const botsNeeded = Math.max(0, TOTAL_CARS - pIds.length);
     
-    // Clear bots to re-balance teams
-    const bIds = Object.keys(bots);
-    bIds.forEach(id => { delete bots[id]; io.emit('botRemoved', id); });
+    // Clear current bots to re-calc team balance properly
+    Object.keys(bots).forEach(id => { delete bots[id]; io.emit('botRemoved', id); });
 
-    let redCount = pIds.filter(id => players[id].team === 'red').length;
-    let blueCount = pIds.filter(id => players[id].team === 'blue').length;
+    let redTotal = pIds.filter(id => players[id].team === 'red').length;
+    let blueTotal = pIds.filter(id => players[id].team === 'blue').length;
 
     for (let i = 0; i < botsNeeded; i++) {
         const id = 'bot_' + Math.random().toString(36).substr(2, 5);
-        const team = (redCount <= blueCount) ? 'red' : 'blue';
-        if (team === 'red') redCount++; else blueCount++;
+        const team = (redTotal <= blueTotal) ? 'red' : 'blue';
+        if (team === 'red') redTotal++; else blueTotal++;
         
-        bots[id] = { x: (Math.random()-0.5)*400, z: (Math.random()-0.5)*400, rot: 0, team, health: 2, speed: 0.7 };
+        bots[id] = { 
+            x: (Math.random()-0.5)*400, 
+            z: (Math.random()-0.5)*400, 
+            rot: 0, 
+            team: team, 
+            health: 2, 
+            speed: 0.7,
+            lastShot: 0 
+        };
     }
 }
 
+// Bot AI: Movement + Combat
+setInterval(() => {
+    Object.keys(bots).forEach(id => {
+        const bot = bots[id];
+        const targetZone = zones[bot.team];
+        if (!targetZone) return;
+
+        // Movement
+        const dx = targetZone.x - bot.x;
+        const dz = targetZone.z - bot.z;
+        const targetRot = Math.atan2(dx, dz);
+        let diff = targetRot - bot.rot;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        bot.rot += diff * 0.1;
+        bot.x += Math.sin(bot.rot) * bot.speed;
+        bot.z += Math.cos(bot.rot) * bot.speed;
+
+        // Combat Logic: Scan for enemies
+        const now = Date.now();
+        if (now - bot.lastShot > 3000) { // Shoot every 3 seconds if enemy near
+            const enemies = [...Object.entries(players), ...Object.entries(bots)].filter(([eid, e]) => e.team !== bot.team);
+            for (let [eid, e] of enemies) {
+                const dist = Math.sqrt((e.x - bot.x)**2 + (e.z - bot.z)**2);
+                if (dist < 40) {
+                    const shootRot = Math.atan2(e.x - bot.x, e.z - bot.z);
+                    io.emit('projectileSpawned', { x: bot.x, z: bot.z, rot: shootRot, owner: id, team: bot.team });
+                    bot.lastShot = now;
+                    break; 
+                }
+            }
+        }
+    });
+    io.emit('botUpdate', bots);
+}, 50);
+
+// Scoring
+setInterval(() => {
+    let rIn = 0, bIn = 0;
+    const all = [...Object.values(players), ...Object.values(bots)];
+    all.forEach(c => {
+        const z = zones[c.team];
+        if (Math.sqrt((c.x-z.x)**2 + (c.z-z.z)**2) < 15) {
+            if (c.team === 'red') rIn++; else bIn++;
+        }
+    });
+    if (rIn > bIn) scores.red++; else if (bIn > rIn) scores.blue++;
+    io.emit('scoreUpdate', scores);
+}, 1000);
+
 io.on('connection', (socket) => {
-    const pCount = Object.keys(players).length;
-    const team = (pCount % 2 === 0) ? 'red' : 'blue';
+    // Balanced join logic
+    const reds = Object.values(players).filter(p => p.team === 'red').length;
+    const blues = Object.values(players).filter(p => p.team === 'blue').length;
+    const team = (reds <= blues) ? 'red' : 'blue';
+    
     players[socket.id] = { x: 0, z: 0, rot: 0, team, health: 2 };
     updateBots();
     
@@ -99,4 +159,4 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => { delete players[socket.id]; updateBots(); io.emit('playerDisconnected', socket.id); });
 });
 
-http.listen(3000, () => console.log('SERVER READY'));
+http.listen(3000, () => console.log('SERVER READY - 5VS5 ACTIVE'));
