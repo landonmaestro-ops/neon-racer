@@ -1,146 +1,451 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PolyArena - Slide Hop FPS</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        #hud { position: absolute; top: 20px; left: 20px; color: #fff; z-index: 10; pointer-events: none; }
-        .red { color: #ff3333; text-shadow: 0 0 10px #ff0000; } 
-        .blue { color: #33aaff; text-shadow: 0 0 10px #00aaff; }
-        #score-board { font-size: 24px; font-weight: bold; background: rgba(0,0,0,0.5); padding: 10px; border-radius: 5px; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; user-select: none; }
+        #ui {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; display: flex; flex-direction: column; justify-content: space-between;
+        }
+        #crosshair {
+            position: absolute; top: 50%; left: 50%; width: 4px; height: 4px;
+            background: rgba(255, 255, 255, 0.8); border-radius: 50%;
+            transform: translate(-50%, -50%); mix-blend-mode: difference;
+        }
+        #health {
+            position: absolute; bottom: 20px; left: 20px;
+            color: white; font-size: 24px; font-weight: bold;
+            text-shadow: 0 0 5px black;
+        }
+        #killFeed {
+            position: absolute; top: 20px; right: 20px;
+            color: white; text-align: right; font-size: 14px;
+            text-shadow: 0 0 2px black; display: flex; flex-direction: column-reverse;
+        }
+        .killMsg { margin-bottom: 5px; opacity: 1; transition: opacity 2s; }
+        #hardpoint {
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            width: 300px; height: 10px; background: #333; border: 2px solid #555;
+        }
+        #hpBar {
+            width: 50%; height: 100%; background: #fff; transition: width 0.2s;
+        }
+        #menu {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); display: flex; flex-direction: column;
+            align-items: center; justify-content: center; pointer-events: auto; z-index: 10;
+        }
+        button { padding: 15px 30px; font-size: 20px; margin: 10px; cursor: pointer; }
+        .hidden { display: none !important; }
     </style>
+    <!-- Import Maps for Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
 </head>
 <body>
-    <div id="hud">
-        <h1 id="myTeam">IDENTIFYING...</h1>
-        <div id="score-board">
-            RED: <span id="rs" class="red">0</span> | BLUE: <span id="bs" class="blue">0</span>
-        </div>
-    </div>
-    <script src="/socket.io/socket.io.js"></script>
-    <script type="importmap">{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }</script>
-    <script type="module">
-        import * as THREE from 'three';
-        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
-        const socket = io();
-        const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        document.body.appendChild(renderer.domElement);
+<div id="menu">
+    <h1 style="color:white; font-family: monospace;">POLY_ARENA</h1>
+    <div style="color:#aaa; margin-bottom:20px;">WASD to Move | SPACE to Jump | C to Crouch/Slide | CLICK to Shoot</div>
+    <button id="btnAssault">Assault</button>
+    <button id="btnSniper">Sniper</button>
+    <button id="btnSmg">SMG</button>
+    <button id="btnShotgun">Shotgun</button>
+</div>
 
-        const composer = new EffectComposer(renderer);
-        composer.addPass(new RenderPass(scene, camera));
-        composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85));
+<div id="ui" class="hidden">
+    <div id="crosshair"></div>
+    <div id="hardpoint"><div id="hpBar"></div></div>
+    <div id="killFeed"></div>
+    <div id="health">HP: 100</div>
+</div>
 
-        const buildings = [{x:60,z:60,w:40,d:40,h:50},{x:-80,z:-30,w:50,d:30,h:80},{x:30,z:-120,w:30,d:60,h:40},{x:120,z:90,w:40,d:40,h:60}];
-        buildings.forEach(b => {
-            const m = new THREE.Mesh(new THREE.BoxGeometry(b.w, b.h, b.d), new THREE.MeshStandardMaterial({color: 0x050505}));
-            m.position.set(b.x, b.h/2, b.z); scene.add(m);
-            const e = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry), new THREE.LineBasicMaterial({color: 0x00ffff}));
-            e.position.copy(m.position); scene.add(e);
-        });
+<script type="module">
+import * as THREE from 'three';
+import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+import { SimplexNoise } from 'three/addons/math/SimplexNoise.js'; // Not standard, using math util instead
 
-        let playerCar, playerTeam, speed = 0, ghost = 0;
-        const otherPlayers = {}, botCars = {}, projectiles = [];
+// --- CONFIG ---
+const SOCKET = io();
+const WORLD_SIZE = 200;
+const FOV = 80;
 
-        function createCar(team) {
-            const color = (team === 'red') ? 0xff0000 : 0x0066ff;
-            const g = new THREE.Group();
-            const b = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.6, 3), new THREE.MeshStandardMaterial({color, emissive:color, emissiveIntensity:1.5}));
-            b.position.y = 0.5; g.add(b);
-            const hp = new THREE.Mesh(new THREE.PlaneGeometry(2, 0.15), new THREE.MeshBasicMaterial({color: 0x00ff00, side: 2}));
-            hp.position.y = 2.5; hp.name = "hp"; g.add(hp);
-            const sh = new THREE.Mesh(new THREE.IcosahedronGeometry(2.5, 1), new THREE.MeshBasicMaterial({color: 0x00ffff, wireframe: true, transparent: true, opacity: 0}));
-            sh.name = "shield"; sh.position.y = 0.5; g.add(sh);
-            return g;
+// --- STATE ---
+let camera, scene, renderer, controls;
+let myId = null;
+let myTeam = null;
+let players = {}; // Remote player meshes
+let tracers = [];
+let lastTime = performance.now();
+let inputs = { keys: { w: false, a: false, s: false, d: false, space: false, crouch: false }, mouseX: 0, mouseY: 0 };
+let myClass = 'ASSAULT';
+
+// Spatial Audio Context
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+const listener = audioCtx.listener;
+
+// --- ASSETS (Procedural) ---
+const geometryBox = new THREE.BoxGeometry(1, 1, 1);
+const matRed = new THREE.MeshLambertMaterial({ color: 0xff4444 });
+const matBlue = new THREE.MeshLambertMaterial({ color: 0x4444ff });
+const matNeutral = new THREE.MeshLambertMaterial({ color: 0x888888 });
+const matBullet = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+
+// --- INIT ---
+function init() {
+    // Scene Setup
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x87CEEB);
+    scene.fog = new THREE.Fog(0x87CEEB, 20, 150);
+
+    camera = new THREE.PerspectiveCamera(FOV, window.innerWidth / window.innerHeight, 0.1, 1000);
+    
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    // Lights
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
+    scene.add(hemiLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(50, 100, 50);
+    dirLight.castShadow = true;
+    dirLight.shadow.camera.left = -100;
+    dirLight.shadow.camera.right = 100;
+    dirLight.shadow.camera.top = 100;
+    dirLight.shadow.camera.bottom = -100;
+    scene.add(dirLight);
+
+    // Map Generation (Low Poly)
+    generateMap();
+
+    // Controls
+    controls = new PointerLockControls(camera, document.body);
+    
+    // UI Events
+    document.getElementById('btnAssault').onclick = () => startGame('ASSAULT');
+    document.getElementById('btnSniper').onclick = () => startGame('SNIPER');
+    document.getElementById('btnSmg').onclick = () => startGame('SMG');
+    document.getElementById('btnShotgun').onclick = () => startGame('SHOTGUN');
+
+    // Input Listeners
+    document.addEventListener('keydown', (e) => handleKey(e, true));
+    document.addEventListener('keyup', (e) => handleKey(e, false));
+    document.addEventListener('mousedown', (e) => {
+        if (controls.isLocked) shoot();
+    });
+    window.addEventListener('resize', onWindowResize);
+
+    // Start Loop
+    animate();
+}
+
+function generateMap() {
+    // Ground
+    const groundGeo = new THREE.PlaneGeometry(WORLD_SIZE * 2, WORLD_SIZE * 2, 40, 40);
+    // Displace vertices for low poly terrain
+    const pos = groundGeo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i);
+        const y = pos.getY(i);
+        // Simple pseudo-random terrain
+        const z = Math.sin(x * 0.05) * Math.cos(y * 0.05) * 2 + Math.random() * 0.5;
+        pos.setZ(i, z);
+    }
+    groundGeo.computeVertexNormals();
+    const groundMat = new THREE.MeshLambertMaterial({ color: 0x3a5f0b, flatShading: true });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    // Random Obstacles (Low Poly Rocks/Crates)
+    for (let i = 0; i < 100; i++) {
+        const s = Math.random() * 3 + 1;
+        const mesh = new THREE.Mesh(geometryBox, matNeutral);
+        mesh.position.set(
+            (Math.random() - 0.5) * WORLD_SIZE,
+            s / 2,
+            (Math.random() - 0.5) * WORLD_SIZE
+        );
+        mesh.scale.set(s, s, s);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        scene.add(mesh);
+    }
+}
+
+function startGame(classType) {
+    myClass = classType;
+    SOCKET.emit('joinGame', { classType });
+    document.getElementById('menu').classList.add('hidden');
+    document.getElementById('ui').classList.remove('hidden');
+    controls.lock();
+}
+
+function handleKey(e, isDown) {
+    const k = e.key.toLowerCase();
+    if (k === 'w') inputs.keys.w = isDown;
+    if (k === 'a') inputs.keys.a = isDown;
+    if (k === 's') inputs.keys.s = isDown;
+    if (k === 'd') inputs.keys.d = isDown;
+    if (k === ' ') inputs.keys.space = isDown;
+    if (k === 'c' || k === 'control') inputs.keys.crouch = isDown;
+}
+
+// --- NETWORKING ---
+SOCKET.on('init', (data) => {
+    myId = data.id;
+    myTeam = data.team;
+    updateHardpointUI(data.hardpoint);
+});
+
+SOCKET.on('worldUpdate', (state) => {
+    // Update Remote Players
+    state.players.forEach(p => {
+        if (p.id === myId) {
+            // Reconciliation: We trust the server for HP, but we predict movement locally.
+            // For this demo, we just update HP.
+            document.getElementById('health').innerText = `HP: ${Math.ceil(p.hp)}`;
+            return;
         }
 
-        socket.on('init', d => {
-            playerTeam = d.team; playerCar = createCar(playerTeam); scene.add(playerCar);
-            const tag = document.getElementById('myTeam');
-            tag.innerText = "YOU ARE TEAM " + playerTeam.toUpperCase();
-            tag.className = playerTeam;
-        });
+        if (!players[p.id]) {
+            // Create new player mesh
+            const group = new THREE.Group();
+            
+            // Body
+            const body = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), p.team === 'red' ? matRed : matBlue);
+            body.position.y = 1;
+            body.castShadow = true;
+            group.add(body);
 
-        socket.on('botUpdate', bs => {
-            Object.keys(bs).forEach(id => {
-                if(!botCars[id]) { botCars[id] = createCar(bs[id].team); scene.add(botCars[id]); }
-                botCars[id].position.set(bs[id].x, 0, bs[id].z); botCars[id].rotation.y = bs[id].rot;
-                botCars[id].getObjectByName("hp").scale.x = Math.max(0.01, bs[id].health / 3);
-            });
-        });
+            // Head
+            const head = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), new THREE.MeshLambertMaterial({color:0xffffff}));
+            head.position.y = 2.2;
+            group.add(head);
 
-        socket.on('scoreUpdate', s => { 
-            document.getElementById('rs').innerText = s.red; 
-            document.getElementById('bs').innerText = s.blue; 
-        });
+            // Weapon
+            const gun = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.8), new THREE.MeshLambertMaterial({color:0x333333}));
+            gun.position.set(0.5, 1.5, 0.5);
+            group.add(gun);
 
-        socket.on('playerReset', d => { if(d.id === socket.id) { playerCar.position.set(d.x, 0, d.z); speed = 0; ghost = 100; } });
-
-        socket.on('projectileSpawned', p => {
-            const m = new THREE.Mesh(new THREE.SphereGeometry(0.5), new THREE.MeshBasicMaterial({color: 0xffffff}));
-            m.position.set(p.x, 0.5, p.z); scene.add(m);
-            projectiles.push({ mesh: m, vx: Math.sin(p.rot)*2.5, vz: Math.cos(p.rot)*2.5, team: p.team, owner: p.owner, l: 0 });
-        });
-
-        const keys = {};
-        window.onkeydown = e => keys[e.code] = true; window.onkeyup = e => keys[e.code] = false;
-        window.onmousedown = () => { if(playerCar && ghost <= 0) socket.emit('shoot', {x: playerCar.position.x, z: playerCar.position.z, rot: playerCar.rotation.y, owner: socket.id, team: playerTeam}); };
-
-        function animate() {
-            requestAnimationFrame(animate);
-            if (playerCar) {
-                const s = playerCar.getObjectByName("shield");
-                if(ghost > 0) { ghost--; s.material.opacity = 0.4; } else { s.material.opacity = 0; }
-
-                camera.fov += ((keys['Space'] ? 90 : 75) - camera.fov) * 0.1; camera.updateProjectionMatrix();
-
-                let acc = keys['Space'] ? 0.03 : 0.01;
-                if(keys['KeyW']) speed += acc; if(keys['KeyS']) speed -= acc;
-                speed *= 0.96;
-                if(keys['KeyA']) playerCar.rotation.y += 0.05; if(keys['KeyD']) playerCar.rotation.y -= 0.05;
-
-                let nx = playerCar.position.x + Math.sin(playerCar.rotation.y) * speed;
-                let nz = playerCar.position.z + Math.cos(playerCar.rotation.y) * speed;
-
-                let repX = 0, repZ = 0;
-                [...Object.values(botCars)].forEach(c => {
-                    if(playerCar.position.distanceTo(c.position) < 3.2 && ghost <= 0) {
-                        repX = (playerCar.position.x - c.position.x) * 0.5; repZ = (playerCar.position.z - c.position.z) * 0.5;
-                        speed *= -0.7;
-                    }
-                });
-
-                const wall = buildings.some(b => nx > b.x-b.w/2-1 && nx < b.x+b.w/2+1 && nz > b.z-b.d/2-1 && nz < b.z+b.d/2+1);
-                if(!wall) { playerCar.position.x = nx + repX; playerCar.position.z = nz + repZ; } else { speed *= -0.5; }
-
-                socket.emit('playerMovement', {x: playerCar.position.x, z: playerCar.position.z, rot: playerCar.rotation.y});
-                camera.position.lerp(new THREE.Vector3(0, 15, -22).applyMatrix4(playerCar.matrixWorld), 0.1); camera.lookAt(playerCar.position);
-
-                for(let i = projectiles.length-1; i >= 0; i--) {
-                    const p = projectiles[i]; p.l++; p.mesh.position.x += p.vx; p.mesh.position.z += p.vz;
-                    if(p.team !== playerTeam && ghost <= 0 && p.mesh.position.distanceTo(playerCar.position) < 2.5) {
-                        socket.emit('hit', {id: socket.id, type: 'player', x: p.mesh.position.x, z: p.mesh.position.z, attackerTeam: p.team});
-                        scene.remove(p.mesh); projectiles.splice(i, 1); continue;
-                    }
-                    if(p.owner === socket.id) {
-                        Object.entries(botCars).forEach(([id, bot]) => {
-                            if(p.mesh.position.distanceTo(bot.position) < 2.5 && bot.team !== p.team) {
-                                socket.emit('hit', {id, type: 'bot', x: p.mesh.position.x, z: p.mesh.position.z, attackerTeam: p.team});
-                                scene.remove(p.mesh); projectiles.splice(i, 1);
-                            }
-                        });
-                    }
-                    if(p.l > 80) { scene.remove(p.mesh); projectiles.splice(i, 1); }
-                }
-                [playerCar, ...Object.values(botCars)].forEach(c => c.getObjectByName("hp").lookAt(camera.position));
-            }
-            composer.render();
+            scene.add(group);
+            players[p.id] = { mesh: group, name: p.name, classType: p.classType };
         }
-        animate();
-    </script>
+
+        // Interpolation
+        const target = players[p.id];
+        target.mesh.position.set(p.x, p.y, p.z);
+        target.mesh.quaternion.set(p.qx, p.qy, p.qz, p.qw);
+        
+        // Slide animation (squash)
+        if (p.sliding) {
+            target.mesh.scale.set(1.5, 0.5, 1.5);
+        } else {
+            target.mesh.scale.set(1, 1, 1);
+        }
+    });
+
+    // Remove disconnected
+    for (const id in players) {
+        if (!state.players.find(p => p.id === id)) {
+            scene.remove(players[id].mesh);
+            delete players[id];
+        }
+    }
+
+    // Update Hardpoint
+    updateHardpointUI(state.hardpoint);
+});
+
+SOCKET.on('tracer', (data) => {
+    createTracer(data.origin, data.direction);
+    playSpatialSound(data.origin, 'shoot');
+});
+
+SOCKET.on('killFeed', (data) => {
+    const div = document.createElement('div');
+    div.className = 'killMsg';
+    div.innerText = data.msg;
+    const feed = document.getElementById('killFeed');
+    feed.appendChild(div);
+    if (feed.children.length > 5) feed.removeChild(feed.firstChild);
+    setTimeout(() => div.style.opacity = 0, 4000);
+});
+
+SOCKET.on('hitMarker', () => {
+    const ch = document.getElementById('crosshair');
+    ch.style.background = 'red';
+    ch.style.transform = 'translate(-50%, -50%) scale(2)';
+    setTimeout(() => {
+        ch.style.background = 'rgba(255,255,255,0.8)';
+        ch.style.transform = 'translate(-50%, -50%) scale(1)';
+    }, 100);
+});
+
+// --- GAME LOGIC ---
+
+function shoot() {
+    // Visual Recoil
+    camera.rotation.x += 0.05;
+
+    // Raycast from camera
+    const dir = new THREE.Vector3();
+    camera.getWorldDirection(dir);
+    const origin = new THREE.Vector3();
+    camera.getWorldPosition(origin);
+
+    SOCKET.emit('shoot', {
+        origin: { x: origin.x, y: origin.y, z: origin.z },
+        direction: { x: dir.x, y: dir.y, z: dir.z }
+    });
+
+    createTracer(origin, dir);
+    playLocalSound('shoot');
+}
+
+function createTracer(origin, dir) {
+    const length = 50;
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(0, 0, -length)
+    ]);
+    const line = new THREE.Line(geometry, matBullet);
+    
+    line.position.set(origin.x, origin.y, origin.z);
+    line.lookAt(origin.x + dir.x, origin.y + dir.y, origin.z + dir.z);
+    
+    scene.add(line);
+    tracers.push({ mesh: line, life: 0.1 });
+}
+
+function updateHardpointUI(hp) {
+    const bar = document.getElementById('hpBar');
+    const total = hp.progress.red + hp.progress.blue;
+    if (total > 0) {
+        const pct = (hp.progress[myTeam] / total) * 100;
+        bar.style.width = pct + '%';
+        bar.style.background = myTeam === 'red' ? '#ff4444' : '#4444ff';
+    }
+}
+
+// --- AUDIO SYSTEM (Spatial) ---
+function playLocalSound(type) {
+    // Simple oscillator beep for local actions
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    
+    if (type === 'shoot') {
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.1);
+    }
+}
+
+function playSpatialSound(pos, type) {
+    // Create a panner node for 3D audio
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const panner = audioCtx.createPanner();
+    panner.panningModel = 'HRTF';
+    panner.distanceModel = 'inverse';
+    panner.refDistance = 1;
+    panner.maxDistance = 100;
+    panner.rolloffFactor = 1;
+    panner.coneInnerAngle = 360;
+    panner.coneOuterAngle = 0;
+    panner.coneOuterGain = 0;
+    
+    panner.positionX.value = pos.x;
+    panner.positionY.value = pos.y;
+    panner.positionZ.value = pos.z;
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    
+    osc.connect(panner);
+    panner.connect(audioCtx.destination);
+    
+    // Gunshot sound synthesis
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(100, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+    
+    // Noise buffer for gunshot crack would be better, but oscillator for simplicity
+    gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+    
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.15);
+}
+
+// --- MAIN LOOP ---
+function animate() {
+    requestAnimationFrame(animate);
+
+    const now = performance.now();
+    const dt = (now - lastTime) / 1000;
+    lastTime = now;
+
+    if (controls.isLocked) {
+        // Send inputs to server
+        const dir = new THREE.Vector3();
+        camera.getWorldDirection(dir);
+        const yaw = Math.atan2(dir.x, dir.z);
+        
+        SOCKET.emit('input', {
+            keys: inputs.keys,
+            quaternion: { x: camera.quaternion.x, y: camera.quaternion.y, z: camera.quaternion.z, w: camera.quaternion.w },
+            yaw: yaw
+        });
+
+        // Update Listener Position for Spatial Audio
+        const p = camera.position;
+        if (listener.positionX) {
+            listener.positionX.value = p.x;
+            listener.positionY.value = p.y;
+            listener.positionZ.value = p.z;
+        }
+    }
+
+    // Update Tracers
+    for (let i = tracers.length - 1; i >= 0; i--) {
+        tracers[i].life -= dt;
+        if (tracers[i].life <= 0) {
+            scene.remove(tracers[i].mesh);
+            tracers.splice(i, 1);
+        }
+    }
+
+    renderer.render(scene, camera);
+}
+
+function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+init();
+</script>
+<script src="/socket.io/socket.io.js"></script>
 </body>
 </html>
