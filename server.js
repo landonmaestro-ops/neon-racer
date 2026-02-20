@@ -21,7 +21,7 @@ const JUMP_FORCE = 10;
 const SLIDE_BOOST = 1.5;
 const FRICTION_GROUND = 0.85;
 const FRICTION_AIR = 0.98;
-const BOT_COUNT = 19; // 19 bots + 1 player = 20
+const BOT_COUNT = 19;
 const ROUND_DURATION = 120;
 const LOBBY_DURATION = 60;
 
@@ -41,7 +41,7 @@ let bots = {};
 let killFeed = [];
 let leaderboard = [];
 
-// Bot names - regular player names
+// Bot names
 const botNames = [
   'ShadowStriker', 'PhantomShot', 'CyberHunter', 'NeonKiller', 'VoidWalker',
   'SteelEagle', 'GhostRecon', 'BlazeRunner', 'NightHawk', 'IronFist',
@@ -112,7 +112,6 @@ class BotAI {
       }
     }
 
-    // Also check other bots
     for (const id in bots) {
       const b = bots[id];
       if (b.id !== this.id && b.alive) {
@@ -126,7 +125,6 @@ class BotAI {
 
     this.target = nearest;
 
-    // AI State Machine
     if (this.target && nearestDist < 40) {
       if (nearestDist < 20) {
         this.state = 'ATTACK';
@@ -137,7 +135,6 @@ class BotAI {
       this.state = 'WANDER';
     }
 
-    // Execute behavior
     switch (this.state) {
       case 'WANDER':
         this.wander(delta);
@@ -176,7 +173,6 @@ class BotAI {
     this.yaw = Math.atan2(dx, dz);
     this.moveForward(delta);
     
-    // Random jump
     if (Math.random() < 0.01 && this.grounded) {
       this.jump();
     }
@@ -189,7 +185,6 @@ class BotAI {
     this.yaw = Math.atan2(dx, dz);
     this.moveForward(delta);
     
-    // Slide hop occasionally
     if (Math.random() < 0.03 && this.grounded) {
       this.sliding = true;
       this.jump();
@@ -206,12 +201,10 @@ class BotAI {
     this.yaw = Math.atan2(dx, dz);
     this.pitch = -Math.atan2(dy - 1.5, dist);
 
-    // Strafe
     const strafeDir = Math.sin(Date.now() * 0.002) > 0 ? 1 : -1;
     this.velocity.x += Math.cos(this.yaw + Math.PI/2) * strafeDir * 3 * delta;
     this.velocity.z += Math.sin(this.yaw + Math.PI/2) * strafeDir * 3 * delta;
 
-    // Shoot
     const now = Date.now();
     const config = CLASSES[this.classType];
     if (now - this.lastShot > config.fireRate) {
@@ -248,7 +241,6 @@ class BotAI {
       z: Math.cos(this.yaw) * Math.cos(this.pitch)
     };
 
-    // Add spread
     dir.x += (Math.random() - 0.5) * config.spread;
     dir.y += (Math.random() - 0.5) * config.spread;
     dir.z += (Math.random() - 0.5) * config.spread;
@@ -266,7 +258,6 @@ class BotAI {
   checkHitscan(origin, dir) {
     const config = CLASSES[this.classType];
     
-    // Check players
     for (const id in players) {
       const p = players[id];
       if (p.id === this.id || !p.alive) continue;
@@ -287,7 +278,6 @@ class BotAI {
       }
     }
 
-    // Check other bots
     for (const id in bots) {
       const b = bots[id];
       if (b.id === this.id || !b.alive) continue;
@@ -302,7 +292,7 @@ class BotAI {
         if (b.hp <= 0) {
           this.kills++;
           b.alive = false;
-          b.respawnTimer = 3; // Respawn after 3 seconds
+          b.respawnTimer = 3;
           addKillFeed(`${this.name} eliminated ${b.name}`);
         }
       }
@@ -356,7 +346,6 @@ class BotAI {
     this.position.x = Math.max(-WORLD_SIZE, Math.min(WORLD_SIZE, this.position.x));
     this.position.z = Math.max(-WORLD_SIZE, Math.min(WORLD_SIZE, this.position.z));
 
-    // Update quaternion
     const cy = Math.cos(this.yaw * 0.5);
     const sy = Math.sin(this.yaw * 0.5);
     const cp = Math.cos(this.pitch * 0.5);
@@ -369,12 +358,10 @@ class BotAI {
   }
 }
 
-// --- GAME MANAGEMENT ---
-
 function initBots() {
   bots = {};
   for (let i = 0; i < BOT_COUNT; i++) {
-    const id = `p_${Math.random().toString(36).substr(2, 9)}`; // Looks like player ID
+    const id = `p_${Math.random().toString(36).substr(2, 9)}`;
     bots[id] = new BotAI(id, botNames[i % botNames.length]);
   }
 }
@@ -383,7 +370,6 @@ function startRound() {
   gameState = 'PLAYING';
   roundTime = ROUND_DURATION;
   
-  // Reset players
   for (const id in players) {
     const p = players[id];
     const config = CLASSES[p.classType];
@@ -410,7 +396,6 @@ function endRound() {
   gameState = 'ENDED';
   roundTime = LOBBY_DURATION;
   
-  // Calculate leaderboard - bots appear as regular players
   const allCombatants = [
     ...Object.values(players).map(p => ({ 
       id: p.id,
@@ -445,7 +430,6 @@ function addKillFeed(msg) {
   io.emit('killFeed', { msg });
 }
 
-// --- PHYSICS ---
 function updatePlayerPhysics(player, delta) {
   if (!player.alive) return;
   
@@ -478,11 +462,9 @@ function updatePlayerPhysics(player, delta) {
   player.position.z = Math.max(-WORLD_SIZE, Math.min(WORLD_SIZE, player.position.z));
 }
 
-// --- GAME LOOP ---
 setInterval(() => {
   const delta = 1 / TICK_RATE;
   
-  // Timer management
   if (gameState === 'LOBBY' || gameState === 'ENDED') {
     roundTime -= delta;
     if (roundTime <= 0) {
@@ -495,20 +477,16 @@ setInterval(() => {
     }
   }
 
-  // Update Bots
   for (const id in bots) {
     bots[id].update(delta, players);
   }
 
-  // Update Players
   for (const id in players) {
     updatePlayerPhysics(players[id], delta);
   }
 
-  // Build world state - bots look like players
   const allEntities = [];
   
-  // Add real players
   for (const id in players) {
     const p = players[id];
     allEntities.push({
@@ -525,7 +503,6 @@ setInterval(() => {
     });
   }
   
-  // Add bots (appear as regular players)
   for (const id in bots) {
     const b = bots[id];
     allEntities.push({
@@ -551,11 +528,10 @@ setInterval(() => {
 
 }, 1000 / TICK_RATE);
 
-// --- SOCKET HANDLING ---
 io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
 
-  // Send current game state
+  // Send current state immediately
   if (gameState === 'PLAYING') {
     socket.emit('spectatorMode', { 
       message: 'Game in progress. You are spectating.',
@@ -566,6 +542,8 @@ io.on('connection', (socket) => {
   }
 
   socket.on('joinGame', (data) => {
+    console.log('Join game requested by:', socket.id, 'Data:', data);
+    
     if (gameState === 'PLAYING') {
       socket.emit('error', { msg: 'Game in progress. Spectate until next round.' });
       return;
@@ -594,7 +572,8 @@ io.on('connection', (socket) => {
       kills: 0
     };
     
-    socket.emit('joined', { id: socket.id });
+    // IMPORTANT: Emit joined event back to client
+    socket.emit('joined', { id: socket.id, name: players[socket.id].name });
     addKillFeed(`${players[socket.id].name} joined the lobby`);
   });
 
@@ -604,10 +583,8 @@ io.on('connection', (socket) => {
     const p = players[socket.id];
     const config = CLASSES[p.classType];
     
-    // Update rotation from client
     p.quaternion = inputs.quaternion;
     
-    // Calculate movement
     const speed = config.speed * PLAYER_SPEED * (p.sliding ? 1.5 : 1.0) * (inputs.keys.crouch ? 0.6 : 1.0);
     
     const forwardX = Math.sin(inputs.yaw);
@@ -629,7 +606,6 @@ io.on('connection', (socket) => {
       moveZ /= len;
     }
 
-    // Slide initiation
     if (inputs.keys.crouch && !p.crouching && p.grounded && len > 0.1) {
       p.sliding = true;
       p.velocity.x += moveX * SLIDE_BOOST * 8;
@@ -643,7 +619,6 @@ io.on('connection', (socket) => {
       p.velocity.z += moveZ * speed * 0.3;
     }
 
-    // Jump / Slide Hop
     if (inputs.keys.space && p.grounded) {
       p.velocity.y = JUMP_FORCE;
       p.grounded = false;
@@ -671,7 +646,6 @@ io.on('connection', (socket) => {
     
     io.emit('tracer', { origin, direction, id: p.id });
 
-    // Check hits on all entities (players and bots)
     for (const id in players) {
       if (id === socket.id) continue;
       const target = players[id];
@@ -697,7 +671,6 @@ io.on('connection', (socket) => {
       }
     }
 
-    // Check hits on bots
     for (const id in bots) {
       const target = bots[id];
       if (!target.alive) continue;
@@ -753,7 +726,6 @@ function checkHitscanCollision(origin, dir, targetPos) {
   return false;
 }
 
-// Initialize
 initBots();
 
 server.listen(3000, () => {
