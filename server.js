@@ -20,6 +20,7 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
+// Game config
 const WORLD_SIZE = 100;
 const PLAYER_SPEED = 12;
 const GRAVITY = 30;
@@ -30,6 +31,7 @@ const FRICTION_AIR = 0.98;
 const BOT_COUNT = 19;
 const ROUND_DURATION = 120;
 const LOBBY_DURATION = 60;
+const TICK_RATE = 60;
 
 const CLASSES = {
   ASSAULT: { hp: 100, speed: 1.0, fireRate: 150, damage: 25, spread: 0.02 },
@@ -55,6 +57,7 @@ class BotAI {
   constructor(id, name) {
     this.id = id;
     this.name = name;
+    this.isBot = true;
     this.classType = Object.keys(CLASSES)[Math.floor(Math.random() * 4)];
     const config = CLASSES[this.classType];
     this.hp = config.hp;
