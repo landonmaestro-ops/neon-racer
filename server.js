@@ -4,36 +4,22 @@ const { Server } = require('socket.io');
 const path = require('path');
 
 const app = express();
-
-// Create HTTP server first
 const server = http.createServer(app);
 
-// Get port from environment (Render sets this) or default to 3000
 const PORT = process.env.PORT || 3000;
-const HOST = '0.0.0.0'; // Bind to all interfaces
+const HOST = '0.0.0.0';
 
-// Attach Socket.IO to server BEFORE anything else
 const io = new Server(server, {
-  pingInterval: 1000,
-  pingTimeout: 5000,
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
-    credentials: false
-  },
+  cors: { origin: "*", methods: ["GET", "POST"] },
   transports: ['websocket', 'polling']
 });
 
-// NOW serve static files (after Socket.IO is attached)
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Health check endpoint for Render
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok', players: Object.keys(players).length });
+  res.status(200).json({ status: 'ok' });
 });
 
-// --- GAME CONFIGURATION ---
-const TICK_RATE = 60;
 const WORLD_SIZE = 100;
 const PLAYER_SPEED = 12;
 const GRAVITY = 30;
@@ -45,37 +31,30 @@ const BOT_COUNT = 19;
 const ROUND_DURATION = 120;
 const LOBBY_DURATION = 60;
 
-// Classes
 const CLASSES = {
-  ASSAULT: { hp: 100, speed: 1.0, fireRate: 150, damage: 25, recoil: 0.5, spread: 0.02, color: 0xff6600 },
-  SNIPER: { hp: 80, speed: 0.85, fireRate: 1200, damage: 100, recoil: 2.0, spread: 0.0, color: 0x00ff00 },
-  SMG: { hp: 90, speed: 1.1, fireRate: 80, damage: 15, recoil: 0.3, spread: 0.05, color: 0x00ffff },
-  SHOTGUN: { hp: 110, speed: 0.95, fireRate: 800, damage: 15, recoil: 1.5, spread: 0.1, pellets: 8, color: 0xff00ff }
+  ASSAULT: { hp: 100, speed: 1.0, fireRate: 150, damage: 25, spread: 0.02 },
+  SNIPER: { hp: 80, speed: 0.85, fireRate: 1200, damage: 100, spread: 0.0 },
+  SMG: { hp: 90, speed: 1.1, fireRate: 80, damage: 15, spread: 0.05 },
+  SHOTGUN: { hp: 110, speed: 0.95, fireRate: 800, damage: 15, spread: 0.1 }
 };
 
-// Game State
 let gameState = 'LOBBY';
 let roundTime = LOBBY_DURATION;
 let players = {};
 let bots = {};
 let killFeed = [];
-let leaderboard = [];
 
-// Bot names
 const botNames = [
   'ShadowStriker', 'PhantomShot', 'CyberHunter', 'NeonKiller', 'VoidWalker',
   'SteelEagle', 'GhostRecon', 'BlazeRunner', 'NightHawk', 'IronFist',
   'ThunderBolt', 'SilentDeath', 'RapidFire', 'HeadHunter', 'SniperWolf',
-  'ViperStrike', 'CobraKai', 'DragonSlayer', 'TitanFall', 'xX_DarkSlayer_Xx',
-  'NoScope360', 'ProGamer2024', 'StealthNinja', 'MegaKill', 'UltraInstinct'
+  'ViperStrike', 'CobraKai', 'DragonSlayer', 'TitanFall', 'xX_DarkSlayer_Xx'
 ];
 
-// --- BOT AI SYSTEM ---
 class BotAI {
   constructor(id, name) {
     this.id = id;
     this.name = name;
-    this.isBot = true;
     this.classType = Object.keys(CLASSES)[Math.floor(Math.random() * 4)];
     const config = CLASSES[this.classType];
     this.hp = config.hp;
@@ -111,9 +90,7 @@ class BotAI {
   update(delta, allPlayers) {
     if (!this.alive) {
       this.respawnTimer -= delta;
-      if (this.respawnTimer <= 0) {
-        this.respawn();
-      }
+      if (this.respawnTimer <= 0) this.respawn();
       return;
     }
 
@@ -145,25 +122,15 @@ class BotAI {
     this.target = nearest;
 
     if (this.target && nearestDist < 40) {
-      if (nearestDist < 20) {
-        this.state = 'ATTACK';
-      } else {
-        this.state = 'CHASE';
-      }
+      this.state = nearestDist < 20 ? 'ATTACK' : 'CHASE';
     } else {
       this.state = 'WANDER';
     }
 
     switch (this.state) {
-      case 'WANDER':
-        this.wander(delta);
-        break;
-      case 'CHASE':
-        this.chase(delta);
-        break;
-      case 'ATTACK':
-        this.attack(delta);
-        break;
+      case 'WANDER': this.wander(delta); break;
+      case 'CHASE': this.chase(delta); break;
+      case 'ATTACK': this.attack(delta); break;
     }
 
     this.updatePhysics(delta);
@@ -438,8 +405,7 @@ function endRound() {
     return b.kills - a.kills;
   });
   
-  leaderboard = allCombatants;
-  io.emit('roundEnd', { leaderboard, winner: allCombatants[0] });
+  io.emit('roundEnd', { leaderboard: allCombatants, winner: allCombatants[0] });
   addKillFeed(`ROUND ENDED - Winner: ${allCombatants[0].name}`);
 }
 
@@ -486,14 +452,10 @@ setInterval(() => {
   
   if (gameState === 'LOBBY' || gameState === 'ENDED') {
     roundTime -= delta;
-    if (roundTime <= 0) {
-      startRound();
-    }
+    if (roundTime <= 0) startRound();
   } else if (gameState === 'PLAYING') {
     roundTime -= delta;
-    if (roundTime <= 0) {
-      endRound();
-    }
+    if (roundTime <= 0) endRound();
   }
 
   for (const id in bots) {
@@ -560,7 +522,7 @@ io.on('connection', (socket) => {
   }
 
   socket.on('joinGame', (data) => {
-    console.log('Join game requested by:', socket.id, 'Data:', data);
+    console.log('Join game requested by:', socket.id);
     
     if (gameState === 'PLAYING') {
       socket.emit('error', { msg: 'Game in progress. Spectate until next round.' });
@@ -745,8 +707,6 @@ function checkHitscanCollision(origin, dir, targetPos) {
 
 initBots();
 
-// START SERVER - Use HOST and PORT for Render compatibility
 server.listen(PORT, HOST, () => {
   console.log(`Server listening on http://${HOST}:${PORT}`);
-  console.log(`Socket.IO client available at: /socket.io/socket.io.js`);
 });
