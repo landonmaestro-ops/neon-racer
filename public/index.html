@@ -434,11 +434,83 @@
     <div id="ammo">Kills: 0</div>
 </div>
 
+<!-- Three.js from CDN -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!-- Socket.IO from CDN -->
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 
-<script type="module">
-import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
-import { PointerLockControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/PointerLockControls.js';
+<script>
+// Simple PointerLockControls implementation
+class PointerLockControls {
+    constructor(camera, domElement) {
+        this.camera = camera;
+        this.domElement = domElement;
+        this.isLocked = false;
+        
+        this.euler = new THREE.Euler(0, 0, 0, 'YXZ');
+        this.PI_2 = Math.PI / 2;
+        
+        this.onMouseMove = this.onMouseMove.bind(this);
+        this.onPointerlockChange = this.onPointerlockChange.bind(this);
+        
+        document.addEventListener('mousemove', this.onMouseMove);
+        document.addEventListener('pointerlockchange', this.onPointerlockChange);
+    }
+    
+    onMouseMove(event) {
+        if (!this.isLocked) return;
+        
+        const movementX = event.movementX || event.mozMovementX || event.webkitMovementX || 0;
+        const movementY = event.movementY || event.mozMovementY || event.webkitMovementY || 0;
+        
+        this.euler.setFromQuaternion(this.camera.quaternion);
+        
+        this.euler.y -= movementX * 0.002;
+        this.euler.x -= movementY * 0.002;
+        
+        this.euler.x = Math.max(-this.PI_2, Math.min(this.PI_2, this.euler.x));
+        
+        this.camera.quaternion.setFromEuler(this.euler);
+    }
+    
+    onPointerlockChange() {
+        this.isLocked = document.pointerLockElement === this.domElement;
+        if (this.isLocked) {
+            this.dispatchEvent({ type: 'lock' });
+        } else {
+            this.dispatchEvent({ type: 'unlock' });
+        }
+    }
+    
+    lock() {
+        this.domElement.requestPointerLock();
+    }
+    
+    unlock() {
+        document.exitPointerLock();
+    }
+    
+    getObject() {
+        return this.camera;
+    }
+    
+    dispatchEvent(event) {
+        if (this._listeners === undefined) return;
+        const listeners = this._listeners[event.type];
+        if (listeners !== undefined) {
+            for (let i = 0; i < listeners.length; i++) {
+                listeners[i].call(this, event);
+            }
+        }
+    }
+    
+    addEventListener(type, listener) {
+        if (this._listeners === undefined) this._listeners = {};
+        const listeners = this._listeners;
+        if (listeners[type] === undefined) listeners[type] = [];
+        if (listeners[type].indexOf(listener) === -1) listeners[type].push(listener);
+    }
+}
 
 const debugDiv = document.getElementById('debug-info');
 function log(msg) {
@@ -448,7 +520,19 @@ function log(msg) {
 }
 
 log('Page loaded');
-log('Checking for io...');
+log('Checking for libraries...');
+
+if (typeof THREE === 'undefined') {
+    log('ERROR: THREE.js not loaded!');
+} else {
+    log('THREE.js loaded OK');
+}
+
+if (typeof io === 'undefined') {
+    log('ERROR: Socket.IO not loaded!');
+} else {
+    log('Socket.IO loaded OK');
+}
 
 const WORLD_SIZE = 100;
 const FOV = 90;
@@ -475,602 +559,4 @@ let socket = null;
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
 const matRed = new THREE.MeshLambertMaterial({ color: 0xff4444 });
-const matBlue = new THREE.MeshLambertMaterial({ color: 0x4444ff });
-const matGreen = new THREE.MeshLambertMaterial({ color: 0x00ff00 });
-const matYellow = new THREE.MeshLambertMaterial({ color: 0xffff00 });
-const matPurple = new THREE.MeshLambertMaterial({ color: 0xff00ff });
-const matCyan = new THREE.MeshLambertMaterial({ color: 0x00ffff });
-const matOrange = new THREE.MeshLambertMaterial({ color: 0xff6600 });
-const matBullet = new THREE.MeshBasicMaterial({ color: 0xffff00 });
-
-const classColors = {
-    ASSAULT: matOrange,
-    SNIPER: matGreen,
-    SMG: matCyan,
-    SHOTGUN: matPurple
-};
-
-function init() {
-    if (typeof io === 'undefined') {
-        log('ERROR: io is undefined!');
-        document.getElementById('connectionStatus').textContent = 'ERROR: Socket.IO not loaded!';
-        document.getElementById('connectionStatus').style.color = '#ff0000';
-        return;
-    }
-    
-    log('io found, connecting...');
-    updateStatus('Connecting...', 'loading');
-    setupSocketConnection();
-    setupUI();
-    setupScene();
-    animate();
-}
-
-function updateStatus(msg, type) {
-    const statusDiv = document.getElementById('connectionStatus');
-    const errorDiv = document.getElementById('errorMessage');
-    statusDiv.textContent = msg;
-    statusDiv.className = type;
-    if (type === 'error') {
-        errorDiv.textContent = msg;
-    } else {
-        errorDiv.textContent = '';
-    }
-}
-
-function setupSocketConnection() {
-    try {
-        log('Creating socket connection...');
-        socket = io({
-            transports: ['websocket', 'polling'],
-            reconnection: true,
-            reconnectionAttempts: 5,
-            reconnectionDelay: 1000
-        });
-        
-        socket.on('connect', () => {
-            log('Connected! ID: ' + socket.id);
-            updateStatus('Connected! Select a class.', 'success');
-        });
-        
-        socket.on('connect_error', (err) => {
-            log('Connection error: ' + err.message);
-            updateStatus('Failed: ' + err.message, 'error');
-        });
-        
-        socket.on('joined', (data) => {
-            log('Joined game: ' + data.id);
-            myId = data.id;
-            document.getElementById('menu').classList.add('hidden');
-        });
-        
-        socket.on('lobbyMode', (data) => {
-            log('In lobby');
-            document.getElementById('menu').classList.remove('hidden');
-            document.getElementById('spectatorScreen').classList.add('hidden');
-            document.getElementById('roundEndScreen').classList.add('hidden');
-            document.getElementById('ui').classList.add('hidden');
-        });
-        
-        socket.on('spectatorMode', (data) => {
-            log('Spectator mode');
-            gameState = 'PLAYING';
-            document.getElementById('menu').classList.add('hidden');
-            document.getElementById('spectatorScreen').classList.remove('hidden');
-            document.getElementById('ui').classList.add('hidden');
-            
-            document.getElementById('spectatorInfo').innerHTML = `
-                <p style="color: #ffaa00; font-size: 18px;">${data.message}</p>
-                <p>Time: ${Math.ceil(data.timeRemaining)}s</p>
-            `;
-        });
-        
-        socket.on('roundStart', (data) => {
-            log('Round started!');
-            gameState = 'PLAYING';
-            isAlive = true;
-            myKills = 0;
-            
-            document.getElementById('menu').classList.add('hidden');
-            document.getElementById('spectatorScreen').classList.add('hidden');
-            document.getElementById('roundEndScreen').classList.add('hidden');
-            document.getElementById('ui').classList.remove('hidden');
-            
-            document.getElementById('clickToPlay').style.display = 'block';
-            document.getElementById('blocker').style.display = 'block';
-        });
-        
-        socket.on('roundEnd', (data) => {
-            log('Round ended');
-            gameState = 'ENDED';
-            isAlive = false;
-            
-            if (controls) controls.unlock();
-            
-            document.getElementById('ui').classList.add('hidden');
-            document.getElementById('clickToPlay').style.display = 'none';
-            document.getElementById('blocker').style.display = 'none';
-            document.getElementById('roundEndScreen').classList.remove('hidden');
-            
-            const winner = data.leaderboard[0];
-            document.getElementById('winnerAnnouncement').innerHTML = 
-                `🏆 Winner: ${winner.name} with ${winner.kills} kills!`;
-            
-            const lbDiv = document.getElementById('finalLeaderboard');
-            lbDiv.innerHTML = data.leaderboard.map((entry, i) => `
-                <div class="leaderboard-entry ${entry.alive ? 'alive' : 'dead'}">
-                    <span>#${i + 1} ${entry.name}</span>
-                    <span>${entry.kills} kills</span>
-                    <span class="status-badge ${entry.alive ? 'alive' : 'dead'}">
-                        ${entry.alive ? 'SURVIVED' : 'ELIMINATED'}
-                    </span>
-                </div>
-            `).join('');
-            
-            let countdown = 60;
-            const cdDiv = document.getElementById('nextRoundCountdown');
-            const interval = setInterval(() => {
-                countdown--;
-                cdDiv.textContent = `Next round in: ${countdown}`;
-                if (countdown <= 0) clearInterval(interval);
-            }, 1000);
-        });
-        
-        socket.on('worldUpdate', (state) => {
-            gameState = state.state;
-            
-            const minutes = Math.floor(state.time / 60);
-            const seconds = state.time % 60;
-            document.getElementById('timer').textContent = 
-                `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-            
-            state.entities.forEach(entity => {
-                if (entity.id === myId) {
-                    if (isAlive && controls && controls.isLocked) {
-                        const targetPos = new THREE.Vector3(entity.x, entity.y, entity.z);
-                        controls.getObject().position.lerp(targetPos, 0.3);
-                    } else if (controls) {
-                        controls.getObject().position.set(entity.x, entity.y, entity.z);
-                    }
-                    
-                    document.getElementById('health').textContent = `HP: ${Math.ceil(entity.hp)}`;
-                    document.getElementById('ammo').textContent = `Kills: ${entity.kills}`;
-                    myKills = entity.kills;
-                    isAlive = entity.alive;
-                    
-                    if (!entity.alive && controls && controls.isLocked) {
-                        controls.unlock();
-                    }
-                    return;
-                }
-                
-                updateEntityMesh(entity);
-            });
-            
-            for (const id in entities) {
-                if (!state.entities.find(e => e.id === id)) {
-                    scene.remove(entities[id]);
-                    delete entities[id];
-                }
-            }
-            
-            updateLeaderboard(state.entities);
-            
-            if (state.killFeed) {
-                const feedDiv = document.getElementById('killFeed');
-                feedDiv.innerHTML = state.killFeed.map(k => 
-                    `<div class="killMsg">${k.msg}</div>`
-                ).join('');
-            }
-        });
-        
-        socket.on('tracer', (data) => {
-            createTracer(data.origin, data.direction);
-        });
-        
-        socket.on('hitMarker', (data) => {
-            const ch = document.getElementById('crosshair');
-            ch.classList.add('hit');
-            setTimeout(() => ch.classList.remove('hit'), 150);
-        });
-        
-        socket.on('error', (data) => {
-            alert(data.msg);
-        });
-        
-    } catch (e) {
-        log('Socket error: ' + e.message);
-        updateStatus('Error: ' + e.message, 'error');
-    }
-}
-
-function setupScene() {
-    log('Setting up Three.js scene...');
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x87CEEB);
-    scene.fog = new THREE.Fog(0x87CEEB, 10, 150);
-
-    camera = new THREE.PerspectiveCamera(FOV, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.y = 2;
-    
-    renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.shadowMap.enabled = true;
-    document.body.appendChild(renderer.domElement);
-
-    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
-    scene.add(hemiLight);
-
-    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    dirLight.position.set(50, 100, 50);
-    dirLight.castShadow = true;
-    scene.add(dirLight);
-
-    generateMap();
-    createGunModel();
-
-    controls = new PointerLockControls(camera, document.body);
-    scene.add(controls.getObject());
-    
-    controls.addEventListener('lock', () => {
-        document.getElementById('clickToPlay').style.display = 'none';
-        document.getElementById('blocker').style.display = 'none';
-        canShoot = true;
-    });
-
-    controls.addEventListener('unlock', () => {
-        if (gameState === 'PLAYING' && isAlive) {
-            document.getElementById('clickToPlay').style.display = 'block';
-            document.getElementById('blocker').style.display = 'block';
-        }
-        canShoot = false;
-    });
-    
-    document.getElementById('clickToPlay').addEventListener('click', () => {
-        controls.lock();
-    });
-
-    setupInputs();
-    
-    window.addEventListener('resize', onWindowResize);
-    log('Scene setup complete');
-}
-
-function createGunModel() {
-    const gunGroup = new THREE.Group();
-    
-    const bodyGeo = new THREE.BoxGeometry(0.1, 0.15, 0.4);
-    const bodyMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
-    const body = new THREE.Mesh(bodyGeo, bodyMat);
-    gunGroup.add(body);
-    
-    const barrelGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.3);
-    const barrelMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
-    const barrel = new THREE.Mesh(barrelGeo, barrelMat);
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.z = -0.3;
-    barrel.position.y = 0.05;
-    gunGroup.add(barrel);
-    
-    const magGeo = new THREE.BoxGeometry(0.08, 0.2, 0.1);
-    const magMat = new THREE.MeshLambertMaterial({ color: 0x222222 });
-    const mag = new THREE.Mesh(magGeo, magMat);
-    mag.position.y = -0.15;
-    mag.position.z = 0.05;
-    mag.rotation.x = -0.3;
-    gunGroup.add(mag);
-    
-    const scopeGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.15);
-    const scopeMat = new THREE.MeshLambertMaterial({ color: 0x000000 });
-    const scope = new THREE.Mesh(scopeGeo, scopeMat);
-    scope.rotation.x = Math.PI / 2;
-    scope.position.y = 0.12;
-    scope.position.z = -0.05;
-    scope.visible = false;
-    scope.name = 'scope';
-    gunGroup.add(scope);
-    
-    gunGroup.position.set(0.3, -0.3, -0.5);
-    camera.add(gunGroup);
-    
-    gunModel = gunGroup;
-}
-
-function generateMap() {
-    const groundGeo = new THREE.PlaneGeometry(WORLD_SIZE * 2, WORLD_SIZE * 2, 50, 50);
-    const pos = groundGeo.attributes.position;
-    
-    for (let i = 0; i < pos.count; i++) {
-        const x = pos.getX(i);
-        const y = pos.getY(i);
-        const z = Math.sin(x * 0.05) * Math.cos(y * 0.05) * 2 + Math.random() * 0.3;
-        pos.setZ(i, z);
-    }
-    groundGeo.computeVertexNormals();
-    
-    const groundMat = new THREE.MeshLambertMaterial({ 
-        color: 0x4a6741, 
-        flatShading: true 
-    });
-    const ground = new THREE.Mesh(groundGeo, groundMat);
-    ground.rotation.x = -Math.PI / 2;
-    ground.receiveShadow = true;
-    scene.add(ground);
-
-    const grid = new THREE.GridHelper(WORLD_SIZE * 2, 40, 0x000000, 0x000000);
-    grid.material.opacity = 0.2;
-    grid.material.transparent = true;
-    scene.add(grid);
-
-    for (let i = 0; i < 80; i++) {
-        const type = Math.random();
-        let mesh;
-        
-        if (type < 0.33) {
-            const s = Math.random() * 3 + 1;
-            mesh = new THREE.Mesh(
-                new THREE.DodecahedronGeometry(s, 0),
-                new THREE.MeshLambertMaterial({ color: 0x888888, flatShading: true })
-            );
-            mesh.position.set(
-                (Math.random() - 0.5) * WORLD_SIZE * 1.5,
-                s * 0.6,
-                (Math.random() - 0.5) * WORLD_SIZE * 1.5
-            );
-        } else if (type < 0.66) {
-            const s = Math.random() * 2 + 1;
-            mesh = new THREE.Mesh(
-                new THREE.BoxGeometry(s, s, s),
-                new THREE.MeshLambertMaterial({ color: 0x8B4513 })
-            );
-            mesh.position.set(
-                (Math.random() - 0.5) * WORLD_SIZE * 1.5,
-                s / 2,
-                (Math.random() - 0.5) * WORLD_SIZE * 1.5
-            );
-        } else {
-            const w = Math.random() * 4 + 2;
-            const h = Math.random() * 3 + 2;
-            mesh = new THREE.Mesh(
-                new THREE.BoxGeometry(w, h, 1),
-                new THREE.MeshLambertMaterial({ color: 0x555555 })
-            );
-            mesh.position.set(
-                (Math.random() - 0.5) * WORLD_SIZE * 1.5,
-                h / 2,
-                (Math.random() - 0.5) * WORLD_SIZE * 1.5
-            );
-            mesh.rotation.y = Math.random() * Math.PI;
-        }
-        
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        scene.add(mesh);
-    }
-}
-
-function setupUI() {
-    document.querySelectorAll('.class-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            myClass = btn.dataset.class;
-            const nameInput = document.getElementById('nameInput');
-            myName = nameInput.value.trim() || `Player_${Math.floor(Math.random() * 1000)}`;
-            
-            if (socket && socket.connected) {
-                log('Joining as: ' + myName);
-                socket.emit('joinGame', { name: myName, classType: myClass });
-            } else {
-                updateStatus('Not connected!', 'error');
-            }
-        });
-    });
-}
-
-function setupInputs() {
-    document.addEventListener('keydown', (e) => {
-        if (!controls || !controls.isLocked) return;
-        
-        const k = e.key.toLowerCase();
-        if (k === 'w') inputs.keys.w = true;
-        if (k === 'a') inputs.keys.a = true;
-        if (k === 's') inputs.keys.s = true;
-        if (k === 'd') inputs.keys.d = true;
-        if (k === ' ') inputs.keys.space = true;
-        if (k === 'c') inputs.keys.crouch = true;
-        if (k === 'shift') inputs.keys.shift = true;
-    });
-    
-    document.addEventListener('keyup', (e) => {
-        const k = e.key.toLowerCase();
-        if (k === 'w') inputs.keys.w = false;
-        if (k === 'a') inputs.keys.a = false;
-        if (k === 's') inputs.keys.s = false;
-        if (k === 'd') inputs.keys.d = false;
-        if (k === ' ') inputs.keys.space = false;
-        if (k === 'c') inputs.keys.crouch = false;
-        if (k === 'shift') inputs.keys.shift = false;
-    });
-    
-    document.addEventListener('mousedown', (e) => {
-        if (e.button === 0 && controls && controls.isLocked && canShoot && isAlive) {
-            shoot();
-        }
-    });
-    
-    document.addEventListener('mousemove', (e) => {
-        if (controls && controls.isLocked) {
-            const euler = new THREE.Euler(0, 0, 0, 'YXZ');
-            euler.setFromQuaternion(camera.quaternion);
-            inputs.yaw = euler.y;
-            inputs.pitch = euler.x;
-        }
-    });
-}
-
-function shoot() {
-    if (gunModel) {
-        gunModel.position.z += 0.05;
-        setTimeout(() => {
-            if (gunModel) gunModel.position.z -= 0.05;
-        }, 50);
-    }
-
-    const dir = new THREE.Vector3();
-    camera.getWorldDirection(dir);
-    
-    const origin = new THREE.Vector3();
-    camera.getWorldPosition(origin);
-    origin.y -= 0.2;
-
-    if (socket) {
-        socket.emit('shoot', {
-            origin: { x: origin.x, y: origin.y, z: origin.z },
-            direction: { x: dir.x, y: dir.y, z: dir.z }
-        });
-    }
-
-    createTracer(origin, dir);
-}
-
-function createTracer(origin, dir) {
-    const length = 100;
-    const geometry = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(0, 0, 0),
-        new THREE.Vector3(0, 0, -length)
-    ]);
-    const line = new THREE.Line(geometry, matBullet);
-    
-    line.position.set(origin.x, origin.y, origin.z);
-    line.lookAt(origin.x + dir.x * length, origin.y + dir.y * length, origin.z + dir.z * length);
-    
-    scene.add(line);
-    tracers.push({ mesh: line, life: 0.1 });
-}
-
-function updateEntityMesh(data) {
-    if (!entities[data.id]) {
-        const group = new THREE.Group();
-        
-        const bodyColor = classColors[data.classType] || matBlue;
-        const body = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.8, 0.5), bodyColor);
-        body.position.y = 0.9;
-        body.castShadow = true;
-        group.add(body);
-        
-        const head = new THREE.Mesh(
-            new THREE.BoxGeometry(0.5, 0.5, 0.5), 
-            new THREE.MeshLambertMaterial({color: 0xffccaa})
-        );
-        head.position.y = 2.0;
-        group.add(head);
-        
-        const gun = new THREE.Mesh(
-            new THREE.BoxGeometry(0.1, 0.1, 0.4),
-            new THREE.MeshLambertMaterial({color: 0x333333})
-        );
-        gun.position.set(0.3, 1.3, 0.3);
-        group.add(gun);
-        
-        const canvas = document.createElement('canvas');
-        canvas.width = 256;
-        canvas.height = 64;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = 'rgba(0,0,0,0.5)';
-        ctx.fillRect(0, 0, 256, 64);
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 32px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText(data.name, 128, 40);
-        
-        const texture = new THREE.CanvasTexture(canvas);
-        const spriteMat = new THREE.SpriteMaterial({ map: texture });
-        const sprite = new THREE.Sprite(spriteMat);
-        sprite.position.y = 3;
-        sprite.scale.set(2, 0.5, 1);
-        group.add(sprite);
-        
-        scene.add(group);
-        entities[data.id] = group;
-    }
-    
-    const mesh = entities[data.id];
-    mesh.position.set(data.x, data.y, data.z);
-    mesh.quaternion.set(data.qx, data.qy, data.qz, data.qw);
-    
-    if (data.sliding) {
-        mesh.scale.set(1.3, 0.6, 1.3);
-    } else {
-        mesh.scale.set(1, 1, 1);
-    }
-    
-    if (!data.alive) {
-        mesh.rotation.x = Math.PI / 2;
-        mesh.position.y = 0.5;
-    } else {
-        mesh.rotation.x = 0;
-    }
-}
-
-function updateLeaderboard(allEntities) {
-    const sorted = [...allEntities].sort((a, b) => {
-        if (a.alive && !b.alive) return -1;
-        if (!a.alive && b.alive) return 1;
-        return b.kills - a.kills;
-    });
-    
-    const lbDiv = document.getElementById('leaderboardContent');
-    lbDiv.innerHTML = sorted.slice(0, 10).map((e, i) => `
-        <div class="leaderboard-entry ${e.alive ? 'alive' : 'dead'}">
-            <span>${i + 1}. ${e.name}</span>
-            <span>${e.kills}</span>
-        </div>
-    `).join('');
-}
-
-function animate() {
-    requestAnimationFrame(animate);
-
-    const now = performance.now();
-    const dt = (now - lastTime) / 1000;
-    lastTime = now;
-
-    if (gameState === 'PLAYING' && isAlive && controls && controls.isLocked && socket) {
-        socket.emit('input', {
-            keys: inputs.keys,
-            quaternion: { 
-                x: camera.quaternion.x, 
-                y: camera.quaternion.y, 
-                z: camera.quaternion.z, 
-                w: camera.quaternion.w 
-            },
-            yaw: inputs.yaw,
-            pitch: inputs.pitch
-        });
-    }
-
-    for (let i = tracers.length - 1; i >= 0; i--) {
-        tracers[i].life -= dt;
-        if (tracers[i].life <= 0) {
-            scene.remove(tracers[i].mesh);
-            tracers.splice(i, 1);
-        }
-    }
-
-    if (renderer && scene && camera) {
-        renderer.render(scene, camera);
-    }
-}
-
-function onWindowResize() {
-    if (!camera || !renderer) return;
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-}
-
-// Start
-log('Starting init...');
-init();
-</script>
-</body>
-</html>
+const matBlue = new THREE.MeshLambertMaterial({
