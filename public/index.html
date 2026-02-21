@@ -278,7 +278,7 @@
         
         .hidden { display: none !important; }
         
-        .spectator-list, .leaderboard-list {
+        .leaderboard-list {
             background: rgba(0,0,0,0.6);
             padding: 20px;
             border-radius: 10px;
@@ -287,7 +287,7 @@
             min-width: 400px;
         }
         
-        .spectator-entry, .leaderboard-entry {
+        .leaderboard-entry {
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -297,11 +297,11 @@
             border-radius: 5px;
         }
         
-        .spectator-entry.alive, .leaderboard-entry.alive {
+        .leaderboard-entry.alive {
             border-left: 4px solid #00ff00;
         }
         
-        .spectator-entry.dead, .leaderboard-entry.dead {
+        .leaderboard-entry.dead {
             border-left: 4px solid #ff4444;
             opacity: 0.6;
         }
@@ -417,18 +417,16 @@
     <div id="ammo">Kills: 0</div>
 </div>
 
-<!-- Socket.IO client - MUST be loaded from server -->
-<script src="/socket.io/socket.io.js"></script>
+<!-- Socket.IO from CDN - guaranteed to work -->
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 
 <script type="module">
 import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
 import { PointerLockControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/PointerLockControls.js';
 
-// --- CONFIG ---
 const WORLD_SIZE = 100;
 const FOV = 90;
 
-// --- STATE ---
 let camera, scene, renderer, controls;
 let myId = null;
 let myClass = 'ASSAULT';
@@ -448,10 +446,8 @@ let isAlive = false;
 let canShoot = false;
 let socket = null;
 
-// Audio Context
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-// Materials
 const matRed = new THREE.MeshLambertMaterial({ color: 0xff4444 });
 const matBlue = new THREE.MeshLambertMaterial({ color: 0x4444ff });
 const matGreen = new THREE.MeshLambertMaterial({ color: 0x00ff00 });
@@ -468,16 +464,15 @@ const classColors = {
     SHOTGUN: matPurple
 };
 
-// Check if io is defined
-if (typeof io === 'undefined') {
-    document.getElementById('connectionStatus').textContent = 'ERROR: Socket.IO not loaded!';
-    document.getElementById('connectionStatus').style.color = '#ff0000';
-    throw new Error('Socket.IO not loaded');
-}
-
-// --- INIT ---
 function init() {
-    updateStatus('Connecting to server...', 'loading');
+    if (typeof io === 'undefined') {
+        document.getElementById('connectionStatus').textContent = 'ERROR: Socket.IO not loaded!';
+        document.getElementById('connectionStatus').style.color = '#ff0000';
+        console.error('Socket.IO not loaded - check CDN');
+        return;
+    }
+    
+    updateStatus('Connecting...', 'loading');
     setupSocketConnection();
     setupUI();
     setupScene();
@@ -498,7 +493,6 @@ function updateStatus(msg, type) {
 
 function setupSocketConnection() {
     try {
-        // Connect to server
         socket = io({
             transports: ['websocket', 'polling'],
             reconnection: true,
@@ -507,29 +501,22 @@ function setupSocketConnection() {
         });
         
         socket.on('connect', () => {
-            console.log('Connected to server:', socket.id);
-            updateStatus('Connected! Select a class to join.', 'success');
+            console.log('Connected:', socket.id);
+            updateStatus('Connected! Select a class.', 'success');
         });
         
         socket.on('connect_error', (err) => {
             console.error('Connection error:', err);
-            updateStatus('Connection failed: ' + err.message, 'error');
-        });
-        
-        socket.on('disconnect', (reason) => {
-            console.log('Disconnected:', reason);
-            updateStatus('Disconnected: ' + reason, 'error');
+            updateStatus('Failed to connect: ' + err.message, 'error');
         });
         
         socket.on('joined', (data) => {
-            console.log('Joined game:', data);
+            console.log('Joined:', data);
             myId = data.id;
             document.getElementById('menu').classList.add('hidden');
-            updateStatus('Waiting for round to start...', 'loading');
         });
         
         socket.on('lobbyMode', (data) => {
-            console.log('In lobby, time until start:', data.timeUntilStart);
             document.getElementById('menu').classList.remove('hidden');
             document.getElementById('spectatorScreen').classList.add('hidden');
             document.getElementById('roundEndScreen').classList.add('hidden');
@@ -537,22 +524,18 @@ function setupSocketConnection() {
         });
         
         socket.on('spectatorMode', (data) => {
-            console.log('Spectator mode:', data);
             gameState = 'PLAYING';
             document.getElementById('menu').classList.add('hidden');
             document.getElementById('spectatorScreen').classList.remove('hidden');
             document.getElementById('ui').classList.add('hidden');
             
             document.getElementById('spectatorInfo').innerHTML = `
-                <p style="color: #ffaa00; font-size: 18px; margin-bottom: 15px;">
-                    ${data.message}
-                </p>
-                <p>Time Remaining: ${Math.ceil(data.timeRemaining)}s</p>
+                <p style="color: #ffaa00; font-size: 18px;">${data.message}</p>
+                <p>Time: ${Math.ceil(data.timeRemaining)}s</p>
             `;
         });
         
         socket.on('roundStart', (data) => {
-            console.log('Round started!');
             gameState = 'PLAYING';
             isAlive = true;
             myKills = 0;
@@ -567,7 +550,6 @@ function setupSocketConnection() {
         });
         
         socket.on('roundEnd', (data) => {
-            console.log('Round ended:', data);
             gameState = 'ENDED';
             isAlive = false;
             
@@ -597,7 +579,7 @@ function setupSocketConnection() {
             const cdDiv = document.getElementById('nextRoundCountdown');
             const interval = setInterval(() => {
                 countdown--;
-                cdDiv.textContent = `Next round starting in: ${countdown}`;
+                cdDiv.textContent = `Next round in: ${countdown}`;
                 if (countdown <= 0) clearInterval(interval);
             }, 1000);
         });
@@ -626,7 +608,6 @@ function setupSocketConnection() {
                     
                     if (!entity.alive && controls && controls.isLocked) {
                         controls.unlock();
-                        document.getElementById('clickToPlay').style.display = 'none';
                     }
                     return;
                 }
@@ -653,28 +634,12 @@ function setupSocketConnection() {
         
         socket.on('tracer', (data) => {
             createTracer(data.origin, data.direction);
-            
-            if (controls) {
-                const myPos = controls.getObject().position;
-                const dist = Math.hypot(
-                    data.origin.x - myPos.x,
-                    data.origin.z - myPos.z
-                );
-                if (dist < 50) {
-                    playSound('shoot', 0.2 * (1 - dist/50));
-                }
-            }
         });
         
         socket.on('hitMarker', (data) => {
             const ch = document.getElementById('crosshair');
             ch.classList.add('hit');
-            if (data.kill) {
-                playSound('hit', 0.5);
-            }
-            setTimeout(() => {
-                ch.classList.remove('hit');
-            }, 150);
+            setTimeout(() => ch.classList.remove('hit'), 150);
         });
         
         socket.on('error', (data) => {
@@ -682,8 +647,8 @@ function setupSocketConnection() {
         });
         
     } catch (e) {
-        console.error('Socket setup error:', e);
-        updateStatus('Failed to initialize: ' + e.message, 'error');
+        console.error('Socket error:', e);
+        updateStatus('Error: ' + e.message, 'error');
     }
 }
 
@@ -698,7 +663,6 @@ function setupScene() {
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     document.body.appendChild(renderer.domElement);
 
     const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
@@ -707,8 +671,6 @@ function setupScene() {
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
     dirLight.position.set(50, 100, 50);
     dirLight.castShadow = true;
-    dirLight.shadow.mapSize.width = 2048;
-    dirLight.shadow.mapSize.height = 2048;
     scene.add(dirLight);
 
     generateMap();
@@ -778,12 +740,6 @@ function createGunModel() {
     camera.add(gunGroup);
     
     gunModel = gunGroup;
-}
-
-function updateGunVisibility() {
-    if (!gunModel) return;
-    const scope = gunModel.getObjectByName('scope');
-    if (scope) scope.visible = myClass === 'SNIPER';
 }
 
 function generateMap() {
@@ -866,11 +822,10 @@ function setupUI() {
             const nameInput = document.getElementById('nameInput');
             myName = nameInput.value.trim() || `Player_${Math.floor(Math.random() * 1000)}`;
             
-            console.log('Emitting joinGame:', { name: myName, classType: myClass });
             if (socket && socket.connected) {
                 socket.emit('joinGame', { name: myName, classType: myClass });
             } else {
-                updateStatus('Not connected to server!', 'error');
+                updateStatus('Not connected!', 'error');
             }
         });
     });
@@ -940,7 +895,6 @@ function shoot() {
     }
 
     createTracer(origin, dir);
-    playSound('shoot', 0.3);
 }
 
 function createTracer(origin, dir) {
@@ -956,33 +910,6 @@ function createTracer(origin, dir) {
     
     scene.add(line);
     tracers.push({ mesh: line, life: 0.1 });
-}
-
-function playSound(type, volume = 0.5) {
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    
-    if (type === 'shoot') {
-        osc.type = 'square';
-        osc.frequency.setValueAtTime(150, audioCtx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.1);
-        gain.gain.setValueAtTime(volume, audioCtx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
-        osc.start();
-        osc.stop(audioCtx.currentTime + 0.1);
-    } else if (type === 'hit') {
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(800, audioCtx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(1200, audioCtx.currentTime + 0.05);
-        gain.gain.setValueAtTime(volume * 0.5, audioCtx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.05);
-        osc.start();
-        osc.stop(audioCtx.currentTime + 0.05);
-    }
 }
 
 function updateEntityMesh(data) {
