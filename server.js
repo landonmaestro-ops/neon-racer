@@ -26,16 +26,16 @@ const SLIDE_BOOST = 1.5;
 const FRICTION_GROUND = 0.85;
 const FRICTION_AIR = 0.98;
 const MAX_PLAYERS = 20;
-const BOT_COUNT = 20;
+const BOT_COUNT = 15;
 const ROUND_DURATION = 120; // seconds
-const LOBBY_DURATION = 60; // seconds
+const LOBBY_DURATION = 10; // seconds - SHORTENED for quick start
 
 // Classes
 const CLASSES = {
-  ASSAULT: { hp: 100, speed: 1.0, fireRate: 150, damage: 25, recoil: 0.5, spread: 0.02, color: 0xff6600 },
-  SNIPER: { hp: 80, speed: 0.85, fireRate: 1200, damage: 100, recoil: 2.0, spread: 0.0, color: 0x00ff00 },
-  SMG: { hp: 90, speed: 1.1, fireRate: 80, damage: 15, recoil: 0.3, spread: 0.05, color: 0x00ffff },
-  SHOTGUN: { hp: 110, speed: 0.95, fireRate: 800, damage: 15, recoil: 1.5, spread: 0.1, pellets: 8, color: 0xff00ff }
+  ASSAULT: { hp: 100, speed: 1.0, fireRate: 150, damage: 25, recoil: 0.5, spread: 0.02, color: 0xff6600, projectileSpeed: 150 },
+  SNIPER: { hp: 80, speed: 0.85, fireRate: 1200, damage: 100, recoil: 2.0, spread: 0.0, color: 0x00ff00, projectileSpeed: 200 },
+  SMG: { hp: 90, speed: 1.1, fireRate: 80, damage: 15, recoil: 0.3, spread: 0.05, color: 0x00ffff, projectileSpeed: 140 },
+  SHOTGUN: { hp: 110, speed: 0.95, fireRate: 800, damage: 15, recoil: 1.5, spread: 0.1, pellets: 8, color: 0xff00ff, projectileSpeed: 120 }
 };
 
 // Game State
@@ -47,13 +47,83 @@ let projectiles = [];
 let killFeed = [];
 let leaderboard = [];
 
-// Bot names
+// Creative realistic gaming names (no "Bot" in them)
 const botNames = [
-  'ShadowStriker', 'PhantomShot', 'CyberHunter', 'NeonKiller', 'VoidWalker',
-  'SteelEagle', 'GhostRecon', 'BlazeRunner', 'NightHawk', 'IronFist',
-  'ThunderBolt', 'SilentDeath', 'RapidFire', 'HeadHunter', 'SniperWolf',
-  'ViperStrike', 'CobraKai', 'DragonSlayer', 'TitanFall', 'WarMachine'
+  'xXShadowSlayerXx', 'FrostByte', 'VenomWolf', 'PhantomStriker', 'NeonReaper',
+  'CyberPulse', 'BlazeKnight', 'ThunderFury', 'NovaRanger', 'IronWraith',
+  'ShadowByte', 'CrimsonFate', 'QuantumNinja', 'VortexRider', 'StealthHawk',
+  'EchoRogue', 'DarkNemesis', 'Frostbite', 'TitanSlayer', 'GhostRider',
+  'MysticSpecter', 'SolarSentinel', 'ApexHunter', 'VoidWalker', 'Zenith',
+  'EmberStorm', 'Chrono', 'NebulaKnight', 'ZeroCrypt', 'AstralDrift',
+  'ChaosVector', 'PhantomCore', 'ViperZen', 'Blitz', 'WarpRider',
+  'AlphaBane', 'VoltageX', 'CrimsonReaper', 'SpectralHunter', 'NeonViper',
+  'DarkNova', 'ThunderBolt', 'Eclipse', 'OrionFalcon', 'Avalanche',
+  'QuantumQuake', 'EmberEnigma', 'VoidVanguard', 'LunarLegend', 'Inferno',
+  'xXSniperWolfXx', 'PixelPhantom', 'CodeBlazer', 'NeoVortex', 'PlasmaWolf',
+  'CyberDagger', 'TitanSpecter', 'InfernoZero', 'EchoRogue', 'StormAegis',
+  'FrostKnight', 'QuantumEdge', 'VenomStrike', 'AeroHunter', 'BladeChronos',
+  'LunarSniper', 'StealthFury', 'IronPulse', 'ZeroCrypt', 'AstralDrift',
+  'ChaosVector', 'BlitzOverdrive', 'PhantomCore', 'ViperZen', 'ShadowPyre',
+  'NebulaAssassin', 'LunarRogue', 'FrostTitan', 'EmberWarden', 'CyberAssault',
+  'NeonFury', 'ShadowCrusader', 'IronRider', 'FireGuardian', 'StormPhoenix',
+  'FrostWarden', 'VoidBlade', 'CrystalFury', 'FlamePaladin', 'TitanSorcerer',
+  'StarMage', 'EmberDragon', 'SteelWarden', 'SavageAssault', 'ThunderCrusader',
+  'IronSaber', 'StormWarden', 'PhoenixWraith', 'ShadowFury', 'TitanKnight'
 ];
+
+// --- PROJECTILE SYSTEM ---
+class Projectile {
+  constructor(id, origin, direction, speed, damage, ownerId, ownerName, isBot = false) {
+    this.id = id;
+    this.position = { ...origin };
+    this.velocity = {
+      x: direction.x * speed,
+      y: direction.y * speed,
+      z: direction.z * speed
+    };
+    this.damage = damage;
+    this.ownerId = ownerId;
+    this.ownerName = ownerName;
+    this.isBot = isBot;
+    this.active = true;
+    this.life = 5.0; // 5 seconds max life
+  }
+
+  update(delta) {
+    this.life -= delta;
+    if (this.life <= 0) {
+      this.active = false;
+      return;
+    }
+
+    this.position.x += this.velocity.x * delta;
+    this.position.y += this.velocity.y * delta;
+    this.position.z += this.velocity.z * delta;
+
+    // Check bounds
+    if (Math.abs(this.position.x) > WORLD_SIZE || 
+        Math.abs(this.position.z) > WORLD_SIZE ||
+        this.position.y < 0 || this.position.y > 100) {
+      this.active = false;
+    }
+  }
+
+  checkHit(targetPos, targetHeight = 1.8) {
+    // Simple sphere collision for body
+    const dx = this.position.x - targetPos.x;
+    const dy = this.position.y - (targetPos.y + targetHeight / 2);
+    const dz = this.position.z - targetPos.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    
+    if (dist < 0.8) {
+      // Determine hit location
+      if (dy > 0.5) return 'head';
+      if (dy < -0.3) return 'limb';
+      return 'body';
+    }
+    return null;
+  }
+}
 
 // --- BOT AI SYSTEM ---
 class BotAI {
@@ -83,6 +153,10 @@ class BotAI {
     this.pitch = 0;
     this.kills = 0;
     this.alive = true;
+    
+    // Animation state for humanoid movement
+    this.animTime = 0;
+    this.walkCycle = 0;
   }
 
   getRandomPoint() {
@@ -95,6 +169,8 @@ class BotAI {
   update(delta, allPlayers) {
     if (!this.alive) return;
 
+    this.animTime += delta;
+    
     // Find nearest target
     let nearest = null;
     let nearestDist = Infinity;
@@ -125,8 +201,8 @@ class BotAI {
     this.target = nearest;
 
     // AI State Machine
-    if (this.target && nearestDist < 30) {
-      if (nearestDist < 15) {
+    if (this.target && nearestDist < 40) {
+      if (nearestDist < 20) {
         this.state = 'ATTACK';
       } else {
         this.state = 'CHASE';
@@ -163,6 +239,7 @@ class BotAI {
 
     this.yaw = Math.atan2(dx, dz);
     this.moveForward(delta);
+    this.walkCycle += delta * 5;
   }
 
   chase(delta) {
@@ -171,6 +248,7 @@ class BotAI {
     const dz = this.target.position.z - this.position.z;
     this.yaw = Math.atan2(dx, dz);
     this.moveForward(delta);
+    this.walkCycle += delta * 8;
     
     // Slide hop occasionally
     if (Math.random() < 0.02 && this.grounded) {
@@ -192,6 +270,7 @@ class BotAI {
     const strafeDir = Math.sin(Date.now() * 0.003) > 0 ? 1 : -1;
     this.velocity.x += Math.cos(this.yaw + Math.PI/2) * strafeDir * 2 * delta;
     this.velocity.z += Math.sin(this.yaw + Math.PI/2) * strafeDir * 2 * delta;
+    this.walkCycle += delta * 6;
 
     // Shoot
     const now = Date.now();
@@ -217,7 +296,6 @@ class BotAI {
   }
 
   shoot() {
-    // Bot shooting logic
     const config = CLASSES[this.classType];
     const origin = {
       x: this.position.x,
@@ -236,82 +314,33 @@ class BotAI {
     dir.y += (Math.random() - 0.5) * config.spread;
     dir.z += (Math.random() - 0.5) * config.spread;
 
-    // Check hits
-    this.checkHitscan(origin, dir);
-    
-    // Broadcast tracer
-    io.emit('tracer', { 
-      origin, 
-      direction: dir, 
-      team: 'bot',
-      id: this.id
+    // Normalize
+    const len = Math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+    dir.x /= len;
+    dir.y /= len;
+    dir.z /= len;
+
+    // Create projectile
+    const projId = `proj_bot_${this.id}_${Date.now()}`;
+    const proj = new Projectile(
+      projId,
+      origin,
+      dir,
+      config.projectileSpeed,
+      config.damage,
+      this.id,
+      this.name,
+      true
+    );
+    projectiles.push(proj);
+
+    // Broadcast fire event
+    io.emit('botFire', {
+      botId: this.id,
+      origin,
+      direction: dir,
+      classType: this.classType
     });
-  }
-
-  checkHitscan(origin, dir) {
-    const config = CLASSES[this.classType];
-    
-    // Check players
-    for (const id in players) {
-      const p = players[id];
-      if (p.id === this.id || !p.alive) continue;
-      
-      const hit = this.raycastHit(origin, dir, p.position);
-      if (hit) {
-        let damage = config.damage;
-        if (hit === 'head') damage *= 2.5;
-        if (hit === 'limb') damage *= 0.7;
-        
-        p.hp -= damage;
-        if (p.hp <= 0) {
-          this.kills++;
-          p.alive = false;
-          addKillFeed(`${this.name} eliminated ${p.name}`);
-        }
-      }
-    }
-
-    // Check other bots
-    for (const id in bots) {
-      const b = bots[id];
-      if (b.id === this.id || !b.alive) continue;
-      
-      const hit = this.raycastHit(origin, dir, b.position);
-      if (hit) {
-        let damage = config.damage;
-        if (hit === 'head') damage *= 2.5;
-        if (hit === 'limb') damage *= 0.7;
-        
-        b.hp -= damage;
-        if (b.hp <= 0) {
-          this.kills++;
-          b.alive = false;
-          addKillFeed(`${this.name} eliminated ${b.name}`);
-        }
-      }
-    }
-  }
-
-  raycastHit(origin, dir, targetPos) {
-    const dx = targetPos.x - origin.x;
-    const dy = targetPos.y - origin.y;
-    const dz = targetPos.z - origin.z;
-    
-    const dot = dx * dir.x + dy * dir.y + dz * dir.z;
-    if (dot < 0) return false;
-
-    const closestX = origin.x + dir.x * dot;
-    const closestY = origin.y + dir.y * dot;
-    const closestZ = origin.z + dir.z * dot;
-
-    const dist = Math.hypot(closestX - targetPos.x, closestY - targetPos.y, closestZ - targetPos.z);
-    
-    if (dist < 1.5) {
-      if (closestY > targetPos.y + 1.5) return 'head';
-      if (closestY < targetPos.y - 1.0) return 'limb';
-      return 'body';
-    }
-    return false;
   }
 
   updatePhysics(delta) {
@@ -357,7 +386,7 @@ function initBots() {
   bots = {};
   for (let i = 0; i < BOT_COUNT; i++) {
     const id = `bot_${i}`;
-    bots[id] = new BotAI(id, botNames[i]);
+    bots[id] = new BotAI(id, botNames[i % botNames.length]);
   }
 }
 
@@ -384,6 +413,9 @@ function startRound() {
   // Reset bots
   initBots();
   
+  // Clear projectiles
+  projectiles = [];
+  
   killFeed = [];
   io.emit('roundStart', { duration: ROUND_DURATION });
   addKillFeed('ROUND STARTED - FIGHT!');
@@ -393,10 +425,13 @@ function endRound() {
   gameState = 'ENDED';
   roundTime = LOBBY_DURATION;
   
-  // Calculate leaderboard
+  // Clear projectiles
+  projectiles = [];
+  
+  // Calculate leaderboard - hide bot status
   const allCombatants = [
     ...Object.values(players).map(p => ({ name: p.name, kills: p.kills, alive: p.alive, isBot: false })),
-    ...Object.values(bots).map(b => ({ name: b.name, kills: b.kills, alive: b.alive, isBot: true }))
+    ...Object.values(bots).map(b => ({ name: b.name, kills: b.kills, alive: b.alive, isBot: false })) // Hide bot status
   ];
   
   allCombatants.sort((a, b) => {
@@ -408,6 +443,11 @@ function endRound() {
   leaderboard = allCombatants;
   io.emit('roundEnd', { leaderboard, winner: allCombatants[0] });
   addKillFeed(`ROUND ENDED - Winner: ${allCombatants[0].name}`);
+  
+  // Reset players to lobby state
+  for (const id in players) {
+    players[id].alive = false;
+  }
 }
 
 function addKillFeed(msg) {
@@ -457,8 +497,7 @@ setInterval(() => {
   if (gameState === 'LOBBY' || gameState === 'ENDED') {
     roundTime -= delta;
     if (roundTime <= 0) {
-      if (gameState === 'LOBBY') startRound();
-      else startRound();
+      startRound();
     }
   } else if (gameState === 'PLAYING') {
     roundTime -= delta;
@@ -480,6 +519,76 @@ setInterval(() => {
   // Update Players
   for (const id in players) {
     updatePlayerPhysics(players[id], delta);
+  }
+
+  // Update Projectiles
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const proj = projectiles[i];
+    proj.update(delta);
+    
+    if (!proj.active) {
+      projectiles.splice(i, 1);
+      continue;
+    }
+    
+    // Check hits on players
+    for (const id in players) {
+      const p = players[id];
+      if (p.id === proj.ownerId || !p.alive) continue;
+      
+      const hit = proj.checkHit(p.position);
+      if (hit) {
+        let damage = proj.damage;
+        if (hit === 'head') damage *= 2.5;
+        if (hit === 'limb') damage *= 0.7;
+        
+        p.hp -= damage;
+        proj.active = false;
+        
+        // Notify shooter
+        const shooter = players[proj.ownerId] || bots[proj.ownerId];
+        if (shooter && players[proj.ownerId]) {
+          io.to(proj.ownerId).emit('hitMarker', { kill: p.hp <= 0 });
+        }
+        
+        if (p.hp <= 0) {
+          p.alive = false;
+          shooter.kills++;
+          addKillFeed(`${proj.ownerName} eliminated ${p.name}`);
+        }
+        break;
+      }
+    }
+    
+    // Check hits on bots
+    if (proj.active) {
+      for (const id in bots) {
+        const b = bots[id];
+        if (b.id === proj.ownerId || !b.alive) continue;
+        
+        const hit = proj.checkHit(b.position);
+        if (hit) {
+          let damage = proj.damage;
+          if (hit === 'head') damage *= 2.5;
+          if (hit === 'limb') damage *= 0.7;
+          
+          b.hp -= damage;
+          proj.active = false;
+          
+          if (b.hp <= 0) {
+            b.alive = false;
+            const shooter = players[proj.ownerId] || bots[proj.ownerId];
+            if (shooter) shooter.kills++;
+            addKillFeed(`${proj.ownerName} eliminated ${b.name}`);
+          }
+          break;
+        }
+      }
+    }
+    
+    if (!proj.active) {
+      projectiles.splice(i, 1);
+    }
   }
 
   // Broadcast World State
@@ -507,7 +616,18 @@ setInterval(() => {
       hp: b.hp,
       alive: b.alive,
       kills: b.kills,
-      name: b.name
+      name: b.name,
+      walkCycle: b.walkCycle,
+      animTime: b.animTime
+    })),
+    projectiles: projectiles.map(p => ({
+      id: p.id,
+      x: p.position.x,
+      y: p.position.y,
+      z: p.position.z,
+      vx: p.velocity.x,
+      vy: p.velocity.y,
+      vz: p.velocity.z
     })),
     killFeed: killFeed.slice(0, 5)
   };
@@ -520,23 +640,11 @@ setInterval(() => {
 io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
 
-  // If game is in progress, send spectator mode
-  if (gameState === 'PLAYING') {
-    socket.emit('spectatorMode', { 
-      message: 'Game in progress. You are in spectator mode.',
-      leaderboard,
-      timeRemaining: roundTime
-    });
-  } else {
-    socket.emit('lobbyMode', { timeUntilStart: roundTime });
-  }
+  // Always show menu first, not spectator mode
+  socket.emit('lobbyMode', { timeUntilStart: roundTime, gameState });
 
   socket.on('joinGame', (data) => {
-    if (gameState === 'PLAYING') {
-      socket.emit('error', { msg: 'Game in progress. Please wait for the next round.' });
-      return;
-    }
-
+    // Allow joining even if game is playing - they'll wait for next round in lobby
     const classConfig = CLASSES[data.classType || 'ASSAULT'];
     
     players[socket.id] = {
@@ -635,56 +743,35 @@ io.on('connection', (socket) => {
     const origin = data.origin;
     const direction = data.direction;
     
-    io.emit('tracer', { origin, direction, id: p.id, isPlayer: true });
+    // Normalize direction
+    const dirLen = Math.sqrt(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
+    const dir = {
+      x: direction.x / dirLen,
+      y: direction.y / dirLen,
+      z: direction.z / dirLen
+    };
+    
+    // Create projectile
+    const projId = `proj_${socket.id}_${now}`;
+    const proj = new Projectile(
+      projId,
+      origin,
+      dir,
+      config.projectileSpeed,
+      config.damage,
+      socket.id,
+      p.name,
+      false
+    );
+    projectiles.push(proj);
 
-    // Check hits on players
-    for (const id in players) {
-      if (id === socket.id) continue;
-      const target = players[id];
-      if (!target.alive) continue;
-
-      const hit = checkHitscanCollision(origin, direction, target.position);
-      if (hit) {
-        let damage = config.damage;
-        if (hit === 'head') damage *= 2.5;
-        if (hit === 'limb') damage *= 0.7;
-
-        target.hp -= damage;
-        
-        if (target.hp <= 0) {
-          target.alive = false;
-          p.kills++;
-          addKillFeed(`${p.name} eliminated ${target.name}`);
-          socket.emit('hitMarker', { kill: true });
-        } else {
-          socket.emit('hitMarker', { kill: false });
-        }
-      }
-    }
-
-    // Check hits on bots
-    for (const id in bots) {
-      const target = bots[id];
-      if (!target.alive) continue;
-
-      const hit = checkHitscanCollision(origin, direction, target.position);
-      if (hit) {
-        let damage = config.damage;
-        if (hit === 'head') damage *= 2.5;
-        if (hit === 'limb') damage *= 0.7;
-
-        target.hp -= damage;
-        
-        if (target.hp <= 0) {
-          target.alive = false;
-          p.kills++;
-          addKillFeed(`${p.name} eliminated ${target.name}`);
-          socket.emit('hitMarker', { kill: true });
-        } else {
-          socket.emit('hitMarker', { kill: false });
-        }
-      }
-    }
+    // Broadcast fire event
+    io.emit('playerFire', {
+      playerId: socket.id,
+      origin,
+      direction: dir,
+      classType: p.classType
+    });
   });
 
   socket.on('disconnect', () => {
@@ -694,28 +781,6 @@ io.on('connection', (socket) => {
     }
   });
 });
-
-function checkHitscanCollision(origin, dir, targetPos) {
-  const dx = targetPos.x - origin.x;
-  const dy = targetPos.y - origin.y;
-  const dz = targetPos.z - origin.z;
-  
-  const dot = dx * dir.x + dy * dir.y + dz * dir.z;
-  if (dot < 0) return false;
-
-  const closestX = origin.x + dir.x * dot;
-  const closestY = origin.y + dir.y * dot;
-  const closestZ = origin.z + dir.z * dot;
-
-  const dist = Math.hypot(closestX - targetPos.x, closestY - targetPos.y, closestZ - targetPos.z);
-  
-  if (dist < 1.5) {
-    if (closestY > targetPos.y + 1.5) return 'head';
-    if (closestY < targetPos.y - 1.0) return 'limb';
-    return 'body';
-  }
-  return false;
-}
 
 // Initialize bots for first round
 initBots();
