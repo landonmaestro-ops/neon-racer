@@ -8,18 +8,29 @@ const app = express();
 // Create HTTP server first
 const server = http.createServer(app);
 
+// Get port from environment (Render sets this) or default to 3000
+const PORT = process.env.PORT || 3000;
+const HOST = '0.0.0.0'; // Bind to all interfaces
+
 // Attach Socket.IO to server BEFORE anything else
 const io = new Server(server, {
   pingInterval: 1000,
   pingTimeout: 5000,
   cors: {
     origin: "*",
-    methods: ["GET", "POST"]
-  }
+    methods: ["GET", "POST"],
+    credentials: false
+  },
+  transports: ['websocket', 'polling']
 });
 
 // NOW serve static files (after Socket.IO is attached)
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Health check endpoint for Render
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', players: Object.keys(players).length });
+});
 
 // --- GAME CONFIGURATION ---
 const TICK_RATE = 60;
@@ -734,8 +745,8 @@ function checkHitscanCollision(origin, dir, targetPos) {
 
 initBots();
 
-// START SERVER LISTENING AT THE END
-server.listen(3000, () => {
-  console.log('Server listening on *:3000');
-  console.log('Socket.IO client available at: http://localhost:3000/socket.io/socket.io.js');
+// START SERVER - Use HOST and PORT for Render compatibility
+server.listen(PORT, HOST, () => {
+  console.log(`Server listening on http://${HOST}:${PORT}`);
+  console.log(`Socket.IO client available at: /socket.io/socket.io.js`);
 });
