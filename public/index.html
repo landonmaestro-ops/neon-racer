@@ -1131,4 +1131,126 @@ function updateCombatantMesh(data, isBot) {
     
     // Animate limbs based on walk cycle if bot
     if (isBot && data.walkCycle) {
-        const walkCycle = data.walkCycle || 
+        const walkCycle = data.walkCycle || 0;
+        const parts = meshData.parts;
+        
+        // Arm swing opposite to legs
+        parts.leftArm.rotation.x = Math.sin(walkCycle) * 0.5;
+        parts.rightArm.rotation.x = Math.sin(walkCycle + Math.PI) * 0.5;
+        
+        parts.leftForearm.rotation.x = Math.sin(walkCycle) * 0.3 - 0.2;
+        parts.rightForearm.rotation.x = Math.sin(walkCycle + Math.PI) * 0.3 - 0.2;
+        
+        // Leg swing
+        parts.leftLeg.rotation.x = Math.sin(walkCycle + Math.PI) * 0.6;
+        parts.rightLeg.rotation.x = Math.sin(walkCycle) * 0.6;
+        
+        parts.leftLowerLeg.rotation.x = Math.max(0, Math.sin(walkCycle + Math.PI) * 0.8);
+        parts.rightLowerLeg.rotation.x = Math.max(0, Math.sin(walkCycle) * 0.8);
+        
+        // Gun sway
+        parts.gun.rotation.z = Math.sin(walkCycle * 2) * 0.05;
+    }
+    
+    // Slide animation
+    if (data.sliding) {
+        group.scale.set(1.3, 0.6, 1.3);
+    } else {
+        group.scale.set(1, 1, 1);
+    }
+    
+    // Death animation (fall over)
+    if (!data.alive) {
+        group.rotation.x = Math.PI / 2;
+        group.position.y = 0.5;
+    }
+}
+
+function updateLeaderboard(allCombatants) {
+    allCombatants.sort((a, b) => {
+        if (a.alive && !b.alive) return -1;
+        if (!a.alive && b.alive) return 1;
+        return b.kills - a.kills;
+    });
+    
+    const lbDiv = document.getElementById('leaderboardContent');
+    // No [BOT] labels - looks like real players
+    lbDiv.innerHTML = allCombatants.slice(0, 10).map((p, i) => `
+        <div class="leaderboard-entry ${p.alive ? 'alive' : 'dead'}">
+            <span>${i + 1}. ${p.name}</span>
+            <span>${p.kills}</span>
+        </div>
+    `).join('');
+}
+
+// Projectile management
+let projectileMeshes = {};
+
+function updateProjectiles(serverProjectiles) {
+    // Remove old projectiles not in server list
+    for (const id in projectileMeshes) {
+        const stillExists = serverProjectiles.find(p => p.id === id);
+        if (!stillExists) {
+            scene.remove(projectileMeshes[id]);
+            delete projectileMeshes[id];
+        }
+    }
+    
+    // Update or create projectiles
+    serverProjectiles.forEach(p => {
+        if (!projectileMeshes[p.id]) {
+            const geometry = new THREE.SphereGeometry(0.1, 8, 8);
+            const material = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+            const mesh = new THREE.Mesh(geometry, material);
+            scene.add(mesh);
+            projectileMeshes[p.id] = mesh;
+        }
+        
+        projectileMeshes[p.id].position.set(p.x, p.y, p.z);
+    });
+}
+
+// --- MAIN LOOP ---
+function animate() {
+    requestAnimationFrame(animate);
+
+    const now = performance.now();
+    const dt = (now - lastTime) / 1000;
+    lastTime = now;
+
+    if (gameState === 'PLAYING') {
+        if (isAlive && controls && controls.isLocked) {
+            // Send inputs to server
+            SOCKET.emit('input', {
+                keys: inputs.keys,
+                quaternion: { 
+                    x: camera.quaternion.x, 
+                    y: camera.quaternion.y, 
+                    z: camera.quaternion.z, 
+                    w: camera.quaternion.w 
+                },
+                yaw: inputs.yaw,
+                pitch: inputs.pitch
+            });
+        }
+    }
+
+    renderer.render(scene, camera);
+}
+
+function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+// CRITICAL FIX: Wait for DOM and socket to be ready
+window.addEventListener('DOMContentLoaded', () => {
+    // Give socket time to connect
+    setTimeout(() => {
+        init();
+    }, 500);
+});
+</script>
+</body>
+</html>
