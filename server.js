@@ -5,10 +5,16 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
+
+// CRITICAL: Use proper CORS for Render
 const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET", "POST"] },
-  pingInterval: 1000,
-  pingTimeout: 5000
+  cors: {
+    origin: true, // Allow all origins on Render
+    credentials: true,
+    methods: ["GET", "POST"]
+  },
+  allowEIO3: true, // Allow older clients
+  transports: ['websocket', 'polling'] // Fallback to polling if websocket fails
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -22,9 +28,9 @@ const JUMP_FORCE = 10;
 const SLIDE_BOOST = 1.5;
 const FRICTION_GROUND = 0.85;
 const FRICTION_AIR = 0.98;
-const BOT_COUNT = 8; // Reduced for performance
+const BOT_COUNT = 8;
 const ROUND_DURATION = 90;
-const LOBBY_DURATION = 5; // VERY SHORT for testing
+const LOBBY_DURATION = 5; // 5 seconds for quick start
 
 const CLASSES = {
   ASSAULT: { hp: 100, speed: 1.0, fireRate: 150, damage: 25, spread: 0.02, color: 0xff6600, projectileSpeed: 150 },
@@ -161,14 +167,12 @@ class BotAI {
       this.yaw = Math.atan2(dx, dz);
       
       if (nearestDist > 10) {
-        // Chase
         const speed = CLASSES[this.classType].speed * PLAYER_SPEED * 0.5;
         this.velocity.x += Math.sin(this.yaw) * speed * delta;
         this.velocity.z += Math.cos(this.yaw) * speed * delta;
         this.walkCycle += delta * 6;
       }
       
-      // Shoot
       const now = Date.now();
       const config = CLASSES[this.classType];
       if (now - this.lastShot > config.fireRate) {
@@ -176,7 +180,6 @@ class BotAI {
         this.shoot();
       }
     } else {
-      // Wander
       this.walkCycle += delta * 2;
     }
 
@@ -260,7 +263,7 @@ function startRound() {
     const config = CLASSES[p.classType];
     p.hp = config.hp;
     p.maxHp = config.hp;
-    p.alive = true; // CRITICAL: Set to TRUE
+    p.alive = true;
     p.kills = 0;
     p.position = {
       x: (Math.random() - 0.5) * WORLD_SIZE * 0.8,
@@ -442,8 +445,7 @@ setInterval(() => {
 // --- SOCKET HANDLING ---
 io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
-  socket.emit('lobbyMode', { timeUntilStart: roundTime, gameState });
-
+  
   socket.on('joinGame', (data) => {
     const classConfig = CLASSES[data.classType || 'ASSAULT'];
     
@@ -464,13 +466,16 @@ io.on('connection', (socket) => {
       sliding: false,
       crouching: false,
       lastShot: 0,
-      alive: false, // Start as not alive until round starts
+      alive: false,
       kills: 0,
       inputs: {}
     };
     
     socket.emit('joined', { id: socket.id });
     addKillFeed(`${players[socket.id].name} joined`);
+    
+    // Send current game state
+    socket.emit('lobbyMode', { timeUntilStart: roundTime, gameState });
   });
 
   socket.on('input', (inputs) => {
@@ -558,7 +563,8 @@ io.on('connection', (socket) => {
 
 initBots();
 
+// CRITICAL: Use process.env.PORT for Render
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Server listening on *:${PORT}`);
+  console.log(`Server listening on port ${PORT}`);
 });
