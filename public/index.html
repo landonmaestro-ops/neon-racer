@@ -14,6 +14,21 @@
             user-select: none; 
         }
         
+        #debug-info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.8);
+            color: #0f0;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 12px;
+            z-index: 1000;
+            max-width: 400px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
         #blocker {
             position: absolute;
             top: 0;
@@ -364,6 +379,8 @@
 </head>
 <body>
 
+<div id="debug-info">Loading...</div>
+
 <div id="blocker"></div>
 
 <div id="clickToPlay" class="click-to-play">CLICK TO PLAY</div>
@@ -417,12 +434,21 @@
     <div id="ammo">Kills: 0</div>
 </div>
 
-<!-- Socket.IO from CDN - guaranteed to work -->
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 
 <script type="module">
 import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
 import { PointerLockControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/PointerLockControls.js';
+
+const debugDiv = document.getElementById('debug-info');
+function log(msg) {
+    console.log(msg);
+    debugDiv.innerHTML += '<br>' + msg;
+    debugDiv.scrollTop = debugDiv.scrollHeight;
+}
+
+log('Page loaded');
+log('Checking for io...');
 
 const WORLD_SIZE = 100;
 const FOV = 90;
@@ -466,12 +492,13 @@ const classColors = {
 
 function init() {
     if (typeof io === 'undefined') {
+        log('ERROR: io is undefined!');
         document.getElementById('connectionStatus').textContent = 'ERROR: Socket.IO not loaded!';
         document.getElementById('connectionStatus').style.color = '#ff0000';
-        console.error('Socket.IO not loaded - check CDN');
         return;
     }
     
+    log('io found, connecting...');
     updateStatus('Connecting...', 'loading');
     setupSocketConnection();
     setupUI();
@@ -493,6 +520,7 @@ function updateStatus(msg, type) {
 
 function setupSocketConnection() {
     try {
+        log('Creating socket connection...');
         socket = io({
             transports: ['websocket', 'polling'],
             reconnection: true,
@@ -501,22 +529,23 @@ function setupSocketConnection() {
         });
         
         socket.on('connect', () => {
-            console.log('Connected:', socket.id);
+            log('Connected! ID: ' + socket.id);
             updateStatus('Connected! Select a class.', 'success');
         });
         
         socket.on('connect_error', (err) => {
-            console.error('Connection error:', err);
-            updateStatus('Failed to connect: ' + err.message, 'error');
+            log('Connection error: ' + err.message);
+            updateStatus('Failed: ' + err.message, 'error');
         });
         
         socket.on('joined', (data) => {
-            console.log('Joined:', data);
+            log('Joined game: ' + data.id);
             myId = data.id;
             document.getElementById('menu').classList.add('hidden');
         });
         
         socket.on('lobbyMode', (data) => {
+            log('In lobby');
             document.getElementById('menu').classList.remove('hidden');
             document.getElementById('spectatorScreen').classList.add('hidden');
             document.getElementById('roundEndScreen').classList.add('hidden');
@@ -524,6 +553,7 @@ function setupSocketConnection() {
         });
         
         socket.on('spectatorMode', (data) => {
+            log('Spectator mode');
             gameState = 'PLAYING';
             document.getElementById('menu').classList.add('hidden');
             document.getElementById('spectatorScreen').classList.remove('hidden');
@@ -536,6 +566,7 @@ function setupSocketConnection() {
         });
         
         socket.on('roundStart', (data) => {
+            log('Round started!');
             gameState = 'PLAYING';
             isAlive = true;
             myKills = 0;
@@ -550,6 +581,7 @@ function setupSocketConnection() {
         });
         
         socket.on('roundEnd', (data) => {
+            log('Round ended');
             gameState = 'ENDED';
             isAlive = false;
             
@@ -647,12 +679,13 @@ function setupSocketConnection() {
         });
         
     } catch (e) {
-        console.error('Socket error:', e);
+        log('Socket error: ' + e.message);
         updateStatus('Error: ' + e.message, 'error');
     }
 }
 
 function setupScene() {
+    log('Setting up Three.js scene...');
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x87CEEB);
     scene.fog = new THREE.Fog(0x87CEEB, 10, 150);
@@ -700,6 +733,7 @@ function setupScene() {
     setupInputs();
     
     window.addEventListener('resize', onWindowResize);
+    log('Scene setup complete');
 }
 
 function createGunModel() {
@@ -823,6 +857,7 @@ function setupUI() {
             myName = nameInput.value.trim() || `Player_${Math.floor(Math.random() * 1000)}`;
             
             if (socket && socket.connected) {
+                log('Joining as: ' + myName);
                 socket.emit('joinGame', { name: myName, classType: myClass });
             } else {
                 updateStatus('Not connected!', 'error');
@@ -1033,6 +1068,8 @@ function onWindowResize() {
     renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
+// Start
+log('Starting init...');
 init();
 </script>
 </body>
