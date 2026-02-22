@@ -5,566 +5,584 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-
-// CRITICAL: Use proper CORS for Render
 const io = new Server(server, {
   cors: {
-    origin: true, // Allow all origins on Render
-    credentials: true,
+    origin: "*",
     methods: ["GET", "POST"]
-  },
-  allowEIO3: true, // Allow older clients
-  transports: ['websocket', 'polling'] // Fallback to polling if websocket fails
+  }
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// --- GAME CONFIGURATION ---
-const TICK_RATE = 60;
-const WORLD_SIZE = 100;
-const PLAYER_SPEED = 12;
-const GRAVITY = 30;
-const JUMP_FORCE = 10;
-const SLIDE_BOOST = 1.5;
-const FRICTION_GROUND = 0.85;
-const FRICTION_AIR = 0.98;
-const BOT_COUNT = 8;
-const ROUND_DURATION = 90;
-const LOBBY_DURATION = 5; // 5 seconds for quick start
+// Game Constants
+const MAX_PLAYERS = 20;
+const MAP_SIZE = 200;
+const STORM_SHRINK_RATE = 0.5;
+const STORM_DAMAGE = 5;
+const ROUND_WAIT_TIME = 60000; // 60 seconds
+const BOT_NAMES = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Ghost', 'Hunter', 'Iron', 'Joker', 'Killer', 'Lion', 'Maverick', 'Ninja', 'Omega', 'Phantom', 'Quake', 'Raptor', 'Shadow', 'Titan'];
 
-const CLASSES = {
-  ASSAULT: { hp: 100, speed: 1.0, fireRate: 150, damage: 25, spread: 0.02, color: 0xff6600, projectileSpeed: 150 },
-  SNIPER: { hp: 80, speed: 0.85, fireRate: 1200, damage: 100, spread: 0.0, color: 0x00ff00, projectileSpeed: 200 },
-  SMG: { hp: 90, speed: 1.1, fireRate: 80, damage: 15, spread: 0.05, color: 0x00ffff, projectileSpeed: 140 },
-  SHOTGUN: { hp: 110, speed: 0.95, fireRate: 800, damage: 15, spread: 0.1, color: 0xff00ff, projectileSpeed: 120 }
+// Weapon Definitions
+const WEAPONS = {
+  assault: {
+    name: 'Assault Rifle',
+    damage: 25,
+    fireRate: 150,
+    maxAmmo: 30,
+    reloadTime: 2000,
+    range: 100,
+    spread: 0.02
+  },
+  machine: {
+    name: 'Machine Gun',
+    damage: 15,
+    fireRate: 80,
+    maxAmmo: 100,
+    reloadTime: 3000,
+    range: 80,
+    spread: 0.04
+  },
+  shotgun: {
+    name: 'Shotgun',
+    damage: 80,
+    fireRate: 800,
+    maxAmmo: 8,
+    reloadTime: 2500,
+    range: 40,
+    pellets: 5,
+    spread: 0.08
+  },
+  sniper: {
+    name: 'Sniper Rifle',
+    damage: 100,
+    fireRate: 1200,
+    maxAmmo: 5,
+    reloadTime: 3000,
+    range: 200,
+    spread: 0.005
+  }
 };
 
-let gameState = 'LOBBY';
-let roundTime = LOBBY_DURATION;
-let players = {};
-let bots = {};
-let projectiles = [];
-let killFeed = [];
-
-const botNames = [
-  'ShadowSlayer', 'FrostByte', 'VenomWolf', 'Phantom', 'NeonReaper',
-  'CyberPulse', 'BlazeKnight', 'ThunderFury', 'NovaRanger', 'IronWraith',
-  'ShadowByte', 'CrimsonFate', 'QuantumNinja', 'Vortex', 'StealthHawk',
-  'EchoRogue', 'DarkNemesis', 'TitanSlayer', 'GhostRider', 'MysticSpecter'
-];
-
-// --- PROJECTILE SYSTEM ---
-class Projectile {
-  constructor(id, origin, direction, speed, damage, ownerId, ownerName) {
-    this.id = id;
-    this.position = { ...origin };
-    this.velocity = {
-      x: direction.x * speed,
-      y: direction.y * speed,
-      z: direction.z * speed
-    };
-    this.damage = damage;
-    this.ownerId = ownerId;
-    this.ownerName = ownerName;
-    this.active = true;
-    this.life = 3.0;
+class GameState {
+  constructor() {
+    this.players = new Map();
+    this.bots = new Map();
+    this.bullets = [];
+    this.stormRadius = MAP_SIZE;
+    this.stormCenter = { x: 0, z: 0 };
+    this.gamePhase = 'lobby'; // lobby, playing, ending
+    this.roundStartTime = null;
+    this.roundEndTime = null;
+    this.winner = null;
+    this.spectators = new Map();
   }
 
-  update(delta) {
-    this.life -= delta;
-    if (this.life <= 0) {
-      this.active = false;
-      return;
-    }
-
-    this.position.x += this.velocity.x * delta;
-    this.position.y += this.velocity.y * delta;
-    this.position.z += this.velocity.z * delta;
-
-    if (Math.abs(this.position.x) > WORLD_SIZE || 
-        Math.abs(this.position.z) > WORLD_SIZE ||
-        this.position.y < 0) {
-      this.active = false;
-    }
-  }
-
-  checkHit(targetPos) {
-    const dx = this.position.x - targetPos.x;
-    const dy = this.position.y - (targetPos.y + 0.9);
-    const dz = this.position.z - targetPos.z;
-    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+  reset() {
+    this.players.forEach(player => {
+      player.hp = 100;
+      player.x = (Math.random() - 0.5) * MAP_SIZE * 0.8;
+      player.z = (Math.random() - 0.5) * MAP_SIZE * 0.8;
+      player.y = 2;
+      player.kills = 0;
+      player.weapon = 'assault';
+      player.ammo = WEAPONS.assault.maxAmmo;
+      player.isAlive = true;
+      player.lastShot = 0;
+      player.reloading = false;
+    });
     
-    if (dist < 0.8) {
-      if (dy > 0.4) return 'head';
-      if (dy < -0.2) return 'limb';
-      return 'body';
+    this.bots.clear();
+    this.bullets = [];
+    this.stormRadius = MAP_SIZE;
+    this.stormCenter = { x: 0, z: 0 };
+    this.winner = null;
+  }
+
+  spawnBots(count) {
+    const weapons = Object.keys(WEAPONS);
+    for (let i = 0; i < count; i++) {
+      const botId = `bot_${i}_${Date.now()}`;
+      const weapon = weapons[Math.floor(Math.random() * weapons.length)];
+      const bot = {
+        id: botId,
+        isBot: true,
+        name: BOT_NAMES[i % BOT_NAMES.length],
+        x: (Math.random() - 0.5) * MAP_SIZE * 0.8,
+        y: 2,
+        z: (Math.random() - 0.5) * MAP_SIZE * 0.8,
+        rotation: Math.random() * Math.PI * 2,
+        hp: 100,
+        weapon: weapon,
+        ammo: WEAPONS[weapon].maxAmmo,
+        kills: 0,
+        isAlive: true,
+        lastShot: 0,
+        reloading: false,
+        target: null,
+        lastUpdate: Date.now(),
+        color: Math.random() * 0xffffff
+      };
+      this.bots.set(botId, bot);
     }
-    return null;
-  }
-}
-
-// --- BOT AI ---
-class BotAI {
-  constructor(id, name) {
-    this.id = id;
-    this.name = name;
-    this.classType = Object.keys(CLASSES)[Math.floor(Math.random() * 4)];
-    const config = CLASSES[this.classType];
-    this.hp = config.hp;
-    this.maxHp = config.hp;
-    this.position = {
-      x: (Math.random() - 0.5) * WORLD_SIZE * 0.8,
-      y: 2,
-      z: (Math.random() - 0.5) * WORLD_SIZE * 0.8
-    };
-    this.velocity = { x: 0, y: 0, z: 0 };
-    this.quaternion = { x: 0, y: 0, z: 0, w: 1 };
-    this.grounded = true;
-    this.sliding = false;
-    this.lastShot = 0;
-    this.target = null;
-    this.yaw = Math.random() * Math.PI * 2;
-    this.pitch = 0;
-    this.kills = 0;
-    this.alive = true;
-    this.walkCycle = 0;
   }
 
-  update(delta, allPlayers) {
-    if (!this.alive) return;
+  startRound() {
+    this.reset();
+    const botCount = MAX_PLAYERS - this.players.size;
+    if (botCount > 0) {
+      this.spawnBots(botCount);
+    }
+    this.gamePhase = 'playing';
+    this.roundStartTime = Date.now();
+    this.stormRadius = MAP_SIZE;
+  }
 
-    // Find nearest target
-    let nearest = null;
-    let nearestDist = Infinity;
+  endRound(winner) {
+    this.gamePhase = 'ending';
+    this.winner = winner;
+    this.roundEndTime = Date.now();
     
-    for (const id in allPlayers) {
-      const p = allPlayers[id];
-      if (p.id !== this.id && p.alive) {
-        const dist = Math.hypot(p.position.x - this.position.x, p.position.z - this.position.z);
-        if (dist < nearestDist) {
-          nearestDist = dist;
-          nearest = p;
+    setTimeout(() => {
+      this.gamePhase = 'lobby';
+      io.emit('roundEnded', { winner: winner ? winner.name : 'No one' });
+    }, 5000);
+  }
+
+  updateStorm() {
+    if (this.gamePhase !== 'playing') return;
+    
+    const elapsed = (Date.now() - this.roundStartTime) / 1000;
+    const targetRadius = Math.max(20, MAP_SIZE - (elapsed * STORM_SHRINK_RATE));
+    this.stormRadius = Math.max(targetRadius, this.stormRadius - 0.1);
+    
+    // Move storm center slightly
+    this.stormCenter.x += (Math.random() - 0.5) * 0.5;
+    this.stormCenter.z += (Math.random() - 0.5) * 0.5;
+  }
+
+  checkStormDamage() {
+    if (this.gamePhase !== 'playing') return;
+    
+    const checkEntity = (entity) => {
+      if (!entity.isAlive) return;
+      const dx = entity.x - this.stormCenter.x;
+      const dz = entity.z - this.stormCenter.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      
+      if (dist > this.stormRadius) {
+        entity.hp -= STORM_DAMAGE;
+        if (entity.hp <= 0) {
+          this.killPlayer(entity, { name: 'The Storm', isBot: true });
         }
       }
-    }
+    };
 
-    for (const id in bots) {
-      const b = bots[id];
-      if (b.id !== this.id && b.alive) {
-        const dist = Math.hypot(b.position.x - this.position.x, b.position.z - this.position.z);
-        if (dist < nearestDist) {
+    this.players.forEach(checkEntity);
+    this.bots.forEach(checkEntity);
+  }
+
+  killPlayer(victim, killer) {
+    victim.isAlive = false;
+    victim.deathTime = Date.now();
+    
+    if (killer && killer !== victim) {
+      killer.kills++;
+    }
+    
+    io.emit('playerKilled', {
+      victim: victim.name || victim.id,
+      killer: killer ? (killer.name || killer.id) : 'Unknown',
+      weapon: killer ? killer.weapon : 'storm'
+    });
+
+    this.checkWinCondition();
+  }
+
+  checkWinCondition() {
+    const alivePlayers = Array.from(this.players.values()).filter(p => p.isAlive);
+    const aliveBots = Array.from(this.bots.values()).filter(b => b.isAlive);
+    const totalAlive = alivePlayers.length + aliveBots.length;
+
+    if (totalAlive === 1) {
+      const winner = alivePlayers[0] || aliveBots[0];
+      this.endRound(winner);
+    } else if (totalAlive === 0) {
+      this.endRound(null);
+    }
+  }
+
+  updateBots() {
+    if (this.gamePhase !== 'playing') return;
+
+    const now = Date.now();
+    const allTargets = [
+      ...Array.from(this.players.values()).filter(p => p.isAlive),
+      ...Array.from(this.bots.values()).filter(b => b.isAlive)
+    ];
+
+    this.bots.forEach(bot => {
+      if (!bot.isAlive) return;
+      if (now - bot.lastUpdate < 100) return; // Update every 100ms
+      
+      bot.lastUpdate = now;
+
+      // Find nearest target
+      let nearest = null;
+      let nearestDist = Infinity;
+      
+      allTargets.forEach(target => {
+        if (target.id === bot.id) return;
+        const dx = target.x - bot.x;
+        const dz = target.z - bot.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist < nearestDist && dist < WEAPONS[bot.weapon].range) {
           nearestDist = dist;
-          nearest = b;
+          nearest = target;
         }
-      }
-    }
+      });
 
-    this.target = nearest;
+      if (nearest) {
+        bot.target = nearest;
+        // Look at target
+        bot.rotation = Math.atan2(nearest.x - bot.x, nearest.z - bot.z);
+        
+        // Move towards target if too far
+        if (nearestDist > 20) {
+          const speed = 0.15;
+          bot.x += Math.sin(bot.rotation) * speed;
+          bot.z += Math.cos(bot.rotation) * speed;
+        }
 
-    if (this.target && nearestDist < 30) {
-      const dx = this.target.position.x - this.position.x;
-      const dz = this.target.position.z - this.position.z;
-      this.yaw = Math.atan2(dx, dz);
-      
-      if (nearestDist > 10) {
-        const speed = CLASSES[this.classType].speed * PLAYER_SPEED * 0.5;
-        this.velocity.x += Math.sin(this.yaw) * speed * delta;
-        this.velocity.z += Math.cos(this.yaw) * speed * delta;
-        this.walkCycle += delta * 6;
+        // Shoot if in range and has ammo
+        const weapon = WEAPONS[bot.weapon];
+        if (now - bot.lastShot > weapon.fireRate && bot.ammo > 0 && !bot.reloading) {
+          this.shoot(bot);
+          bot.lastShot = now;
+          bot.ammo--;
+          
+          if (bot.ammo <= 0) {
+            this.reload(bot);
+          }
+        }
+      } else {
+        // Random movement
+        bot.rotation += (Math.random() - 0.5) * 0.2;
+        bot.x += Math.sin(bot.rotation) * 0.1;
+        bot.z += Math.cos(bot.rotation) * 0.1;
       }
-      
-      const now = Date.now();
-      const config = CLASSES[this.classType];
-      if (now - this.lastShot > config.fireRate) {
-        this.lastShot = now;
-        this.shoot();
+
+      // Keep in bounds
+      bot.x = Math.max(-MAP_SIZE/2, Math.min(MAP_SIZE/2, bot.x));
+      bot.z = Math.max(-MAP_SIZE/2, Math.min(MAP_SIZE/2, bot.z));
+    });
+  }
+
+  shoot(shooter) {
+    const weapon = WEAPONS[shooter.weapon];
+    const now = Date.now();
+    
+    const bullet = {
+      id: Math.random().toString(36),
+      owner: shooter.id,
+      x: shooter.x,
+      y: shooter.y + 1,
+      z: shooter.z,
+      rotation: shooter.rotation,
+      damage: weapon.damage,
+      speed: 2,
+      range: weapon.range,
+      distance: 0,
+      pellets: weapon.pellets || 1,
+      spread: weapon.spread || 0
+    };
+
+    if (bullet.pellets > 1) {
+      // Shotgun spread
+      for (let i = 0; i < bullet.pellets; i++) {
+        const spreadX = (Math.random() - 0.5) * bullet.spread;
+        const spreadY = (Math.random() - 0.5) * bullet.spread;
+        this.bullets.push({
+          ...bullet,
+          id: `${bullet.id}_${i}`,
+          rotation: bullet.rotation + spreadX,
+          yOffset: spreadY
+        });
       }
     } else {
-      this.walkCycle += delta * 2;
-    }
-
-    this.updatePhysics(delta);
-  }
-
-  shoot() {
-    const config = CLASSES[this.classType];
-    const origin = {
-      x: this.position.x,
-      y: this.position.y + 1.5,
-      z: this.position.z
-    };
-    
-    const dir = {
-      x: Math.sin(this.yaw) * Math.cos(this.pitch),
-      y: Math.sin(this.pitch),
-      z: Math.cos(this.yaw) * Math.cos(this.pitch)
-    };
-
-    dir.x += (Math.random() - 0.5) * config.spread;
-    dir.y += (Math.random() - 0.5) * config.spread;
-    dir.z += (Math.random() - 0.5) * config.spread;
-
-    const len = Math.sqrt(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
-    dir.x /= len; dir.y /= len; dir.z /= len;
-
-    const projId = `proj_bot_${this.id}_${Date.now()}`;
-    projectiles.push(new Projectile(projId, origin, dir, config.projectileSpeed, config.damage, this.id, this.name));
-    
-    io.emit('botFire', { origin, direction: dir });
-  }
-
-  updatePhysics(delta) {
-    if (!this.grounded) this.velocity.y -= GRAVITY * delta;
-
-    this.position.x += this.velocity.x * delta;
-    this.position.y += this.velocity.y * delta;
-    this.position.z += this.velocity.z * delta;
-
-    if (this.position.y <= 2) {
-      this.position.y = 2;
-      this.velocity.y = 0;
-      this.grounded = true;
-      this.velocity.x *= FRICTION_GROUND;
-      this.velocity.z *= FRICTION_GROUND;
-    } else {
-      this.grounded = false;
-      this.velocity.x *= FRICTION_AIR;
-      this.velocity.z *= FRICTION_AIR;
-    }
-
-    this.position.x = Math.max(-WORLD_SIZE, Math.min(WORLD_SIZE, this.position.x));
-    this.position.z = Math.max(-WORLD_SIZE, Math.min(WORLD_SIZE, this.position.z));
-
-    const cy = Math.cos(this.yaw * 0.5);
-    const sy = Math.sin(this.yaw * 0.5);
-    const cp = Math.cos(this.pitch * 0.5);
-    const sp = Math.sin(this.pitch * 0.5);
-    
-    this.quaternion.w = cy * cp;
-    this.quaternion.x = sy * sp;
-    this.quaternion.y = sy * cp;
-    this.quaternion.z = cy * sp;
-  }
-}
-
-function initBots() {
-  bots = {};
-  for (let i = 0; i < BOT_COUNT; i++) {
-    bots[`bot_${i}`] = new BotAI(`bot_${i}`, botNames[i % botNames.length]);
-  }
-}
-
-function startRound() {
-  gameState = 'PLAYING';
-  roundTime = ROUND_DURATION;
-  
-  for (const id in players) {
-    const p = players[id];
-    const config = CLASSES[p.classType];
-    p.hp = config.hp;
-    p.maxHp = config.hp;
-    p.alive = true;
-    p.kills = 0;
-    p.position = {
-      x: (Math.random() - 0.5) * WORLD_SIZE * 0.8,
-      y: 10,
-      z: (Math.random() - 0.5) * WORLD_SIZE * 0.8
-    };
-    p.velocity = { x: 0, y: 0, z: 0 };
-  }
-
-  initBots();
-  projectiles = [];
-  killFeed = [];
-  
-  io.emit('roundStart', { duration: ROUND_DURATION });
-  addKillFeed('ROUND STARTED - FIGHT!');
-}
-
-function endRound() {
-  gameState = 'ENDED';
-  roundTime = LOBBY_DURATION;
-  
-  const allCombatants = [
-    ...Object.values(players).map(p => ({ name: p.name, kills: p.kills, alive: p.alive })),
-    ...Object.values(bots).map(b => ({ name: b.name, kills: b.kills, alive: b.alive }))
-  ].sort((a, b) => b.kills - a.kills);
-  
-  io.emit('roundEnd', { leaderboard: allCombatants, winner: allCombatants[0] });
-  
-  for (const id in players) {
-    players[id].alive = false;
-  }
-}
-
-function addKillFeed(msg) {
-  killFeed.unshift({ msg, time: Date.now() });
-  if (killFeed.length > 5) killFeed.pop();
-  io.emit('killFeed', { msg });
-}
-
-function updatePlayerPhysics(player, delta) {
-  if (!player.alive) return;
-  
-  if (!player.grounded) player.velocity.y -= GRAVITY * delta;
-
-  player.position.x += player.velocity.x * delta;
-  player.position.y += player.velocity.y * delta;
-  player.position.z += player.velocity.z * delta;
-
-  if (player.position.y <= 2) {
-    player.position.y = 2;
-    player.velocity.y = 0;
-    player.grounded = true;
-    const friction = player.sliding ? 0.95 : FRICTION_GROUND;
-    player.velocity.x *= friction;
-    player.velocity.z *= friction;
-    if (player.sliding && Math.abs(player.velocity.x) + Math.abs(player.velocity.z) < 1) player.sliding = false;
-  } else {
-    player.grounded = false;
-    player.velocity.x *= FRICTION_AIR;
-    player.velocity.z *= FRICTION_AIR;
-  }
-
-  player.position.x = Math.max(-WORLD_SIZE, Math.min(WORLD_SIZE, player.position.x));
-  player.position.z = Math.max(-WORLD_SIZE, Math.min(WORLD_SIZE, player.position.z));
-}
-
-// --- GAME LOOP ---
-setInterval(() => {
-  const delta = 1 / TICK_RATE;
-  
-  if (gameState === 'LOBBY' || gameState === 'ENDED') {
-    roundTime -= delta;
-    if (roundTime <= 0) startRound();
-  } else if (gameState === 'PLAYING') {
-    roundTime -= delta;
-    
-    const alivePlayers = Object.values(players).filter(p => p.alive).length;
-    const aliveBots = Object.values(bots).filter(b => b.alive).length;
-    
-    if (roundTime <= 0 || (alivePlayers + aliveBots <= 1 && alivePlayers > 0)) {
-      endRound();
+      // Single bullet with slight spread
+      const spread = (Math.random() - 0.5) * weapon.spread;
+      bullet.rotation += spread;
+      this.bullets.push(bullet);
     }
   }
 
-  for (const id in bots) bots[id].update(delta, players);
-  for (const id in players) updatePlayerPhysics(players[id], delta);
+  reload(player) {
+    if (player.reloading) return;
+    const weapon = WEAPONS[player.weapon];
+    player.reloading = true;
+    
+    setTimeout(() => {
+      player.ammo = weapon.maxAmmo;
+      player.reloading = false;
+    }, weapon.reloadTime);
+  }
 
-  // Update projectiles
-  for (let i = projectiles.length - 1; i >= 0; i--) {
-    const proj = projectiles[i];
-    proj.update(delta);
+  updateBullets() {
+    const now = Date.now();
     
-    if (!proj.active) {
-      projectiles.splice(i, 1);
-      continue;
-    }
-    
-    // Check hits on players
-    for (const id in players) {
-      const p = players[id];
-      if (p.id === proj.ownerId || !p.alive) continue;
+    for (let i = this.bullets.length - 1; i >= 0; i--) {
+      const bullet = this.bullets[i];
+      const dx = Math.sin(bullet.rotation) * bullet.speed;
+      const dz = Math.cos(bullet.rotation) * bullet.speed;
       
-      const hit = proj.checkHit(p.position);
-      if (hit) {
-        let damage = proj.damage;
-        if (hit === 'head') damage *= 2.5;
-        if (hit === 'limb') damage *= 0.7;
-        
-        p.hp -= damage;
-        proj.active = false;
-        
-        if (players[proj.ownerId]) {
-          io.to(proj.ownerId).emit('hitMarker', { kill: p.hp <= 0 });
+      bullet.x += dx;
+      bullet.z += dz;
+      bullet.distance += bullet.speed;
+
+      // Check collisions
+      let hit = false;
+      
+      // Check players
+      for (const player of this.players.values()) {
+        if (!player.isAlive || player.id === bullet.owner) continue;
+        const dist = Math.sqrt((bullet.x - player.x) ** 2 + (bullet.z - player.z) ** 2);
+        if (dist < 2) {
+          player.hp -= bullet.damage;
+          hit = true;
+          if (player.hp <= 0) {
+            const killer = this.players.get(bullet.owner) || this.bots.get(bullet.owner);
+            this.killPlayer(player, killer);
+          }
+          break;
         }
-        
-        if (p.hp <= 0) {
-          p.alive = false;
-          const shooter = players[proj.ownerId] || bots[proj.ownerId];
-          if (shooter) shooter.kills++;
-          addKillFeed(`${proj.ownerName} eliminated ${p.name}`);
+      }
+
+      // Check bots
+      if (!hit) {
+        for (const bot of this.bots.values()) {
+          if (!bot.isAlive || bot.id === bullet.owner) continue;
+          const dist = Math.sqrt((bullet.x - bot.x) ** 2 + (bullet.z - bot.z) ** 2);
+          if (dist < 2) {
+            bot.hp -= bullet.damage;
+            hit = true;
+            if (bot.hp <= 0) {
+              const killer = this.players.get(bullet.owner) || this.bots.get(bullet.owner);
+              this.killPlayer(bot, killer);
+            }
+            break;
+          }
         }
-        break;
+      }
+
+      // Remove if hit or out of range
+      if (hit || bullet.distance > bullet.range) {
+        this.bullets.splice(i, 1);
       }
     }
-    
-    if (!proj.active) {
-      projectiles.splice(i, 1);
-      continue;
-    }
-    
-    // Check hits on bots
-    for (const id in bots) {
-      const b = bots[id];
-      if (b.id === proj.ownerId || !b.alive) continue;
-      
-      const hit = proj.checkHit(b.position);
-      if (hit) {
-        let damage = proj.damage;
-        if (hit === 'head') damage *= 2.5;
-        if (hit === 'limb') damage *= 0.7;
-        
-        b.hp -= damage;
-        proj.active = false;
-        
-        if (b.hp <= 0) {
-          b.alive = false;
-          const shooter = players[proj.ownerId] || bots[proj.ownerId];
-          if (shooter) shooter.kills++;
-          addKillFeed(`${proj.ownerName} eliminated ${b.name}`);
-        }
-        break;
-      }
-    }
-    
-    if (!proj.active) projectiles.splice(i, 1);
   }
 
-  io.emit('worldUpdate', {
-    state: gameState,
-    time: Math.ceil(roundTime),
-    players: Object.values(players).map(p => ({
-      id: p.id, x: p.position.x, y: p.position.y, z: p.position.z,
-      qx: p.quaternion.x, qy: p.quaternion.y, qz: p.quaternion.z, qw: p.quaternion.w,
-      classType: p.classType, sliding: p.sliding, hp: p.hp, maxHp: p.maxHp,
-      alive: p.alive, kills: p.kills, name: p.name
-    })),
-    bots: Object.values(bots).map(b => ({
-      id: b.id, x: b.position.x, y: b.position.y, z: b.position.z,
-      qx: b.quaternion.x, qy: b.quaternion.y, qz: b.quaternion.z, qw: b.quaternion.w,
-      classType: b.classType, sliding: b.sliding, hp: b.hp, alive: b.alive,
-      kills: b.kills, name: b.name, walkCycle: b.walkCycle
-    })),
-    projectiles: projectiles.map(p => ({ id: p.id, x: p.position.x, y: p.position.y, z: p.position.z })),
-    killFeed: killFeed.slice(0, 5)
-  });
+  getLeaderboard() {
+    const allPlayers = [
+      ...Array.from(this.players.values()).map(p => ({...p, isBot: false})),
+      ...Array.from(this.bots.values()).map(b => ({...b, isBot: true}))
+    ];
+    
+    return allPlayers
+      .sort((a, b) => {
+        if (a.isAlive !== b.isAlive) return a.isAlive ? -1 : 1;
+        return b.kills - a.kills;
+      })
+      .map(p => ({
+        name: p.name || p.id,
+        kills: p.kills,
+        isAlive: p.isAlive,
+        isBot: p.isBot
+      }));
+  }
 
-}, 1000 / TICK_RATE);
+  getStateForPlayer(playerId) {
+    return {
+      players: Array.from(this.players.values()).map(p => ({
+        id: p.id,
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        rotation: p.rotation,
+        hp: p.hp,
+        maxHp: 100,
+        weapon: p.weapon,
+        ammo: p.ammo,
+        maxAmmo: WEAPONS[p.weapon].maxAmmo,
+        reloading: p.reloading,
+        kills: p.kills,
+        isAlive: p.isAlive,
+        isBot: false,
+        color: p.color
+      })),
+      bots: Array.from(this.bots.values()).map(b => ({
+        id: b.id,
+        x: b.x,
+        y: b.y,
+        z: b.z,
+        rotation: b.rotation,
+        hp: b.hp,
+        weapon: b.weapon,
+        isAlive: b.isAlive,
+        isBot: true,
+        color: b.color
+      })),
+      bullets: this.bullets,
+      storm: {
+        radius: this.stormRadius,
+        center: this.stormCenter
+      },
+      gamePhase: this.gamePhase,
+      leaderboard: this.getLeaderboard(),
+      yourId: playerId,
+      winner: this.winner ? (this.winner.name || this.winner.id) : null
+    };
+  }
+}
 
-// --- SOCKET HANDLING ---
+const game = new GameState();
+
+// Socket.io handling
 io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
   
-  socket.on('joinGame', (data) => {
-    const classConfig = CLASSES[data.classType || 'ASSAULT'];
-    
-    players[socket.id] = {
-      id: socket.id,
-      name: data.name || `Player_${socket.id.substr(0, 4)}`,
-      classType: data.classType || 'ASSAULT',
-      hp: classConfig.hp,
-      maxHp: classConfig.hp,
-      position: { 
-        x: (Math.random() - 0.5) * WORLD_SIZE * 0.8, 
-        y: 10, 
-        z: (Math.random() - 0.5) * WORLD_SIZE * 0.8 
-      },
-      velocity: { x: 0, y: 0, z: 0 },
-      quaternion: { x: 0, y: 0, z: 0, w: 1 },
-      grounded: false,
-      sliding: false,
-      crouching: false,
-      lastShot: 0,
-      alive: false,
-      kills: 0,
-      inputs: {}
-    };
-    
-    socket.emit('joined', { id: socket.id });
-    addKillFeed(`${players[socket.id].name} joined`);
-    
-    // Send current game state
-    socket.emit('lobbyMode', { timeUntilStart: roundTime, gameState });
+  // Check if game is full
+  if (game.players.size >= MAX_PLAYERS && game.gamePhase === 'playing') {
+    socket.emit('gameFull');
+    game.spectators.set(socket.id, { id: socket.id, socket });
+    socket.emit('spectatorMode', game.getLeaderboard());
+    return;
+  }
+
+  // Create player
+  const player = {
+    id: socket.id,
+    socket: socket,
+    name: `Player ${socket.id.substr(0, 5)}`,
+    x: (Math.random() - 0.5) * MAP_SIZE * 0.8,
+    y: 2,
+    z: (Math.random() - 0.5) * MAP_SIZE * 0.8,
+    rotation: 0,
+    hp: 100,
+    weapon: 'assault',
+    ammo: WEAPONS.assault.maxAmmo,
+    kills: 0,
+    isAlive: true,
+    lastShot: 0,
+    reloading: false,
+    color: Math.random() * 0xffffff
+  };
+
+  game.players.set(socket.id, player);
+
+  // Send current game state
+  socket.emit('init', {
+    playerId: socket.id,
+    gamePhase: game.gamePhase,
+    weapons: WEAPONS,
+    mapSize: MAP_SIZE
   });
 
-  socket.on('input', (inputs) => {
-    if (!players[socket.id] || !players[socket.id].alive || gameState !== 'PLAYING') return;
+  // If in lobby, check if we should start
+  if (game.gamePhase === 'lobby') {
+    const playerCount = game.players.size;
+    socket.emit('lobbyUpdate', {
+      players: playerCount,
+      maxPlayers: MAX_PLAYERS,
+      timeUntilStart: Math.max(0, ROUND_WAIT_TIME - (Date.now() - (game.roundStartTime || Date.now())))
+    });
     
-    const p = players[socket.id];
-    const config = CLASSES[p.classType];
-    
-    p.quaternion = inputs.quaternion;
-    
-    const speed = config.speed * PLAYER_SPEED * (p.sliding ? 1.5 : 1.0) * (p.crouching ? 0.6 : 1.0);
-    
-    const yaw = inputs.yaw;
-    const forwardX = Math.sin(yaw);
-    const forwardZ = Math.cos(yaw);
-    const rightX = Math.sin(yaw + Math.PI / 2);
-    const rightZ = Math.cos(yaw + Math.PI / 2);
-
-    let moveX = 0, moveZ = 0;
-    if (inputs.keys.w) { moveX += forwardX; moveZ += forwardZ; }
-    if (inputs.keys.s) { moveX -= forwardX; moveZ -= forwardZ; }
-    if (inputs.keys.a) { moveX -= rightX; moveZ -= rightZ; }
-    if (inputs.keys.d) { moveX += rightX; moveZ += rightZ; }
-
-    const len = Math.hypot(moveX, moveZ);
-    if (len > 0) { moveX /= len; moveZ /= len; }
-
-    if (inputs.keys.crouch && !p.crouching && p.grounded && len > 0.1) {
-      p.sliding = true;
-      p.velocity.x += moveX * SLIDE_BOOST * 8;
-      p.velocity.z += moveZ * SLIDE_BOOST * 8;
+    if (!game.roundStartTime) {
+      game.roundStartTime = Date.now();
+      setTimeout(() => {
+        if (game.gamePhase === 'lobby') {
+          game.startRound();
+          io.emit('gameStart');
+        }
+      }, ROUND_WAIT_TIME);
     }
+  } else if (game.gamePhase === 'playing') {
+    socket.emit('spectatorMode', game.getLeaderboard());
+  }
+
+  // Handle player input
+  socket.on('move', (data) => {
+    if (!player.isAlive || game.gamePhase !== 'playing') return;
     
-    p.crouching = inputs.keys.crouch;
+    player.x = Math.max(-MAP_SIZE/2, Math.min(MAP_SIZE/2, data.x));
+    player.z = Math.max(-MAP_SIZE/2, Math.min(MAP_SIZE/2, data.z));
+    player.rotation = data.rotation;
+    player.y = data.y || 2;
+  });
 
-    if (p.grounded && !p.sliding) {
-      p.velocity.x += moveX * speed * 0.3;
-      p.velocity.z += moveZ * speed * 0.3;
-    }
-
-    if (inputs.keys.space && p.grounded) {
-      p.velocity.y = JUMP_FORCE;
-      p.grounded = false;
-      if (p.sliding) {
-        p.velocity.x *= 1.3;
-        p.velocity.z *= 1.3;
-        p.sliding = false;
+  socket.on('shoot', () => {
+    if (!player.isAlive || game.gamePhase !== 'playing') return;
+    
+    const weapon = WEAPONS[player.weapon];
+    const now = Date.now();
+    
+    if (now - player.lastShot > weapon.fireRate && player.ammo > 0 && !player.reloading) {
+      game.shoot(player);
+      player.lastShot = now;
+      player.ammo--;
+      
+      if (player.ammo <= 0) {
+        game.reload(player);
       }
     }
   });
 
-  socket.on('shoot', (data) => {
-    if (!players[socket.id] || !players[socket.id].alive || gameState !== 'PLAYING') return;
-    
-    const p = players[socket.id];
-    const now = Date.now();
-    const config = CLASSES[p.classType];
+  socket.on('reload', () => {
+    if (!player.isAlive || game.gamePhase !== 'playing') return;
+    game.reload(player);
+  });
 
-    if (now - p.lastShot < config.fireRate) return;
-    p.lastShot = now;
+  socket.on('weaponChange', (weapon) => {
+    if (WEAPONS[weapon] && !player.reloading) {
+      player.weapon = weapon;
+      player.ammo = WEAPONS[weapon].maxAmmo;
+    }
+  });
 
-    const origin = data.origin;
-    const dir = data.direction;
-    
-    const dirLen = Math.sqrt(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
-    const normalizedDir = {
-      x: dir.x / dirLen,
-      y: dir.y / dirLen,
-      z: dir.z / dirLen
-    };
-    
-    const projId = `proj_${socket.id}_${now}`;
-    projectiles.push(new Projectile(projId, origin, normalizedDir, config.projectileSpeed, config.damage, socket.id, p.name));
-    
-    io.emit('playerFire', { playerId: socket.id, origin, direction: normalizedDir });
+  socket.on('setName', (name) => {
+    player.name = name || player.name;
   });
 
   socket.on('disconnect', () => {
-    if (players[socket.id]) {
-      addKillFeed(`${players[socket.id].name} left`);
-      delete players[socket.id];
+    console.log('Player disconnected:', socket.id);
+    game.players.delete(socket.id);
+    game.spectators.delete(socket.id);
+    
+    if (game.gamePhase === 'playing' && player.isAlive) {
+      game.killPlayer(player, null);
     }
   });
 });
 
-initBots();
+// Game loop
+setInterval(() => {
+  game.updateStorm();
+  game.checkStormDamage();
+  game.updateBots();
+  game.updateBullets();
 
-// CRITICAL: Use process.env.PORT for Render
+  // Send updates to all clients
+  const state = game.getStateForPlayer();
+  
+  game.players.forEach((player, id) => {
+    player.socket.emit('gameState', game.getStateForPlayer(id));
+  });
+
+  game.spectators.forEach((spec) => {
+    spec.socket.emit('spectatorUpdate', game.getLeaderboard());
+  });
+}, 1000 / 30); // 30 FPS
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
