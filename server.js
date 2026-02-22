@@ -75,6 +75,7 @@ class GameState {
     this.roundEndTime = null;
     this.winner = null;
     this.spectators = new Map();
+    this.lobbyTimer = null;
   }
 
   reset() {
@@ -135,6 +136,9 @@ class GameState {
     this.gamePhase = 'playing';
     this.roundStartTime = Date.now();
     this.stormRadius = MAP_SIZE;
+    
+    // Notify all clients
+    io.emit('gameStart');
   }
 
   endRound(winner) {
@@ -144,6 +148,7 @@ class GameState {
     
     setTimeout(() => {
       this.gamePhase = 'lobby';
+      this.roundStartTime = null;
       io.emit('roundEnded', { winner: winner ? winner.name : 'No one' });
     }, 5000);
   }
@@ -222,7 +227,7 @@ class GameState {
 
     this.bots.forEach(bot => {
       if (!bot.isAlive) return;
-      if (now - bot.lastUpdate < 100) return; // Update every 100ms
+      if (now - bot.lastUpdate < 100) return;
       
       bot.lastUpdate = now;
 
@@ -243,17 +248,14 @@ class GameState {
 
       if (nearest) {
         bot.target = nearest;
-        // Look at target
         bot.rotation = Math.atan2(nearest.x - bot.x, nearest.z - bot.z);
         
-        // Move towards target if too far
         if (nearestDist > 20) {
           const speed = 0.15;
           bot.x += Math.sin(bot.rotation) * speed;
           bot.z += Math.cos(bot.rotation) * speed;
         }
 
-        // Shoot if in range and has ammo
         const weapon = WEAPONS[bot.weapon];
         if (now - bot.lastShot > weapon.fireRate && bot.ammo > 0 && !bot.reloading) {
           this.shoot(bot);
@@ -265,13 +267,11 @@ class GameState {
           }
         }
       } else {
-        // Random movement
         bot.rotation += (Math.random() - 0.5) * 0.2;
         bot.x += Math.sin(bot.rotation) * 0.1;
         bot.z += Math.cos(bot.rotation) * 0.1;
       }
 
-      // Keep in bounds
       bot.x = Math.max(-MAP_SIZE/2, Math.min(MAP_SIZE/2, bot.x));
       bot.z = Math.max(-MAP_SIZE/2, Math.min(MAP_SIZE/2, bot.z));
     });
@@ -297,19 +297,15 @@ class GameState {
     };
 
     if (bullet.pellets > 1) {
-      // Shotgun spread
       for (let i = 0; i < bullet.pellets; i++) {
         const spreadX = (Math.random() - 0.5) * bullet.spread;
-        const spreadY = (Math.random() - 0.5) * bullet.spread;
         this.bullets.push({
           ...bullet,
           id: `${bullet.id}_${i}`,
-          rotation: bullet.rotation + spreadX,
-          yOffset: spreadY
+          rotation: bullet.rotation + spreadX
         });
       }
     } else {
-      // Single bullet with slight spread
       const spread = (Math.random() - 0.5) * weapon.spread;
       bullet.rotation += spread;
       this.bullets.push(bullet);
@@ -339,10 +335,8 @@ class GameState {
       bullet.z += dz;
       bullet.distance += bullet.speed;
 
-      // Check collisions
       let hit = false;
       
-      // Check players
       for (const player of this.players.values()) {
         if (!player.isAlive || player.id === bullet.owner) continue;
         const dist = Math.sqrt((bullet.x - player.x) ** 2 + (bullet.z - player.z) ** 2);
@@ -357,7 +351,6 @@ class GameState {
         }
       }
 
-      // Check bots
       if (!hit) {
         for (const bot of this.bots.values()) {
           if (!bot.isAlive || bot.id === bullet.owner) continue;
@@ -374,7 +367,6 @@ class GameState {
         }
       }
 
-      // Remove if hit or out of range
       if (hit || bullet.distance > bullet.range) {
         this.bullets.splice(i, 1);
       }
@@ -401,6 +393,7 @@ class GameState {
   }
 
   getStateForPlayer(playerId) {
+    const self = this.players.get(playerId);
     return {
       players: Array.from(this.players.values()).map(p => ({
         id: p.id,
@@ -439,8 +432,36 @@ class GameState {
       gamePhase: this.gamePhase,
       leaderboard: this.getLeaderboard(),
       yourId: playerId,
-      winner: this.winner ? (this.winner.name || this.winner.id) : null
+      winner: this.winner ? (this.winner.name || this.winner.id) : null,
+      timeUntilStart: this.roundStartTime ? Math.max(0, ROUND_WAIT_TIME - (Date.now() - this.roundStartTime)) : null
     };
+  }
+
+  startLobbyTimer() {
+    if (this.lobbyTimer) return;
+    this.roundStartTime = Date.now();
+    
+    this.lobbyTimer = setInterval(() => {
+      if (this.gamePhase !== 'lobby') {
+        clearInterval(this.lobbyTimer);
+        this.lobbyTimer = null;
+        return;
+      }
+      
+      const timeLeft = Math.max(0, ROUND_WAIT_TIME - (Date.now() - this.roundStartTime));
+      
+      io.emit('lobbyUpdate', {
+        players: this.players.size,
+        maxPlayers: MAX_PLAYERS,
+        timeUntilStart: timeLeft
+      });
+      
+      if (timeLeft <= 0 && this.gamePhase === 'lobby') {
+        clearInterval(this.lobbyTimer);
+        this.lobbyTimer = null;
+        this.startRound();
+      }
+    }, 1000); // Update every second
   }
 }
 
@@ -487,23 +508,16 @@ io.on('connection', (socket) => {
     mapSize: MAP_SIZE
   });
 
-  // If in lobby, check if we should start
+  // If in lobby, check if we should start timer
   if (game.gamePhase === 'lobby') {
-    const playerCount = game.players.size;
     socket.emit('lobbyUpdate', {
-      players: playerCount,
+      players: game.players.size,
       maxPlayers: MAX_PLAYERS,
-      timeUntilStart: Math.max(0, ROUND_WAIT_TIME - (Date.now() - (game.roundStartTime || Date.now())))
+      timeUntilStart: game.roundStartTime ? Math.max(0, ROUND_WAIT_TIME - (Date.now() - game.roundStartTime)) : ROUND_WAIT_TIME
     });
     
-    if (!game.roundStartTime) {
-      game.roundStartTime = Date.now();
-      setTimeout(() => {
-        if (game.gamePhase === 'lobby') {
-          game.startRound();
-          io.emit('gameStart');
-        }
-      }, ROUND_WAIT_TIME);
+    if (!game.lobbyTimer) {
+      game.startLobbyTimer();
     }
   } else if (game.gamePhase === 'playing') {
     socket.emit('spectatorMode', game.getLeaderboard());
@@ -542,7 +556,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('weaponChange', (weapon) => {
-    if (WEAPONS[weapon] && !player.reloading) {
+    if (WEAPONS[weapon] && !player.reloading && game.gamePhase === 'playing') {
       player.weapon = weapon;
       player.ammo = WEAPONS[weapon].maxAmmo;
     }
@@ -560,6 +574,15 @@ io.on('connection', (socket) => {
     if (game.gamePhase === 'playing' && player.isAlive) {
       game.killPlayer(player, null);
     }
+    
+    // If no players left, reset lobby
+    if (game.players.size === 0 && game.gamePhase === 'lobby') {
+      if (game.lobbyTimer) {
+        clearInterval(game.lobbyTimer);
+        game.lobbyTimer = null;
+        game.roundStartTime = null;
+      }
+    }
   });
 });
 
@@ -571,8 +594,6 @@ setInterval(() => {
   game.updateBullets();
 
   // Send updates to all clients
-  const state = game.getStateForPlayer();
-  
   game.players.forEach((player, id) => {
     player.socket.emit('gameState', game.getStateForPlayer(id));
   });
