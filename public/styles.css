@@ -1,0 +1,299 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+body {
+  overflow: hidden;
+  background: #1a1a2e;
+  color: white;
+}
+
+#gameCanvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+
+.screen {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.85);
+  z-index: 100;
+  padding: 20px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+#lobby h1 {
+  font-size: 3em;
+  color: #ff6b6b;
+  text-shadow: 0 0 20px #ff6b6b;
+  margin-bottom: 20px;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+.lobby-info {
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+#playerCount {
+  font-size: 1.5em;
+  color: #4ecdc4;
+  margin: 10px 0;
+}
+
+#countdown {
+  font-size: 2em;
+  color: #ffe66d;
+  font-weight: bold;
+}
+
+.controls-info {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 20px;
+  border-radius: 10px;
+  margin-bottom: 30px;
+}
+
+.controls-info h3 {
+  color: #4ecdc4;
+  margin-bottom: 10px;
+}
+
+.weapon-showcase {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 15px;
+  max-width: 600px;
+}
+
+.weapon-card {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 15px;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  transition: all 0.3s;
+}
+
+.weapon-card:hover {
+  border-color: #4ecdc4;
+  transform: translateY(-5px);
+}
+
+.weapon-card h4 {
+  color: #ff6b6b;
+  margin-bottom: 5px;
+}
+
+.weapon-card p {
+  font-size: 0.9em;
+  color: #ffe66d;
+}
+
+/* HUD Styles */
+#hud {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 50;
+}
+
+#health-bar {
+  position: absolute;
+  bottom: 30px;
+  left: 30px;
+  width: 200px;
+  height: 30px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 2px solid white;
+  border-radius: 15px;
+  overflow: hidden;
+}
+
+#health-fill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #ff6b6b, #4ecdc4);
+  transition: width 0.3s;
+}
+
+#health-text {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-weight: bold;
+  text-shadow: 0 0 5px black;
+}
+
+#ammo-display {
+  position: absolute;
+  bottom: 30px;
+  right: 30px;
+  font-size: 2em;
+  font-weight: bold;
+  text-shadow: 0 0 10px black;
+}
+
+#reload-indicator {
+  color: #ff6b6b;
+  font-size: 0.6em;
+  animation: blink 0.5s infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+#weapon-display {
+  position: absolute;
+  bottom: 70px;
+  right: 30px;
+  font-size: 1.2em;
+  color: #4ecdc4;
+  text-shadow: 0 0 5px black;
+}
+
+#crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 24px;
+  color: rgba(255, 255, 255, 0.8);
+  text-shadow: 0 0 5px black;
+  pointer-events: none;
+}
+
+#leaderboard {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 15px;
+  border-radius: 10px;
+  min-width: 200px;
+}
+
+#leaderboard h3 {
+  color: #ffe66d;
+  margin-bottom: 10px;
+  border-bottom: 2px solid #ffe66d;
+  padding-bottom: 5px;
+}
+
+.leaderboard-entry {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.leaderboard-entry.alive {
+  color: #4ecdc4;
+}
+
+.leaderboard-entry.dead {
+  color: #666;
+  text-decoration: line-through;
+}
+
+.leaderboard-entry.me {
+  background: rgba(255, 107, 107, 0.3);
+}
+
+#kill-feed {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  max-width: 300px;
+}
+
+.kill-entry {
+  background: rgba(0, 0, 0, 0.7);
+  padding: 8px 12px;
+  margin-bottom: 5px;
+  border-radius: 5px;
+  border-left: 3px solid #ff6b6b;
+  animation: slideIn 0.3s, fadeOut 0.3s 4.7s forwards;
+}
+
+@keyframes slideIn {
+  from { transform: translateX(-100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes fadeOut {
+  to { opacity: 0; }
+}
+
+#storm-warning {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(255, 0, 0, 0.8);
+  padding: 20px 40px;
+  border-radius: 10px;
+  font-size: 1.5em;
+  font-weight: bold;
+  animation: pulse 1s infinite;
+}
+
+#gameOver h1 {
+  font-size: 3em;
+  color: #ffe66d;
+  margin-bottom: 20px;
+}
+
+#gameOver button {
+  padding: 15px 30px;
+  font-size: 1.2em;
+  background: #4ecdc4;
+  border: none;
+  border-radius: 5px;
+  color: white;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+#gameOver button:hover {
+  background: #ff6b6b;
+  transform: scale(1.1);
+}
+
+#spectator {
+  background: rgba(0, 0, 0, 0.9);
+}
+
+#spectator h2 {
+  color: #4ecdc4;
+  margin-bottom: 20px;
+}
+
+.wait-msg {
+  color: #ffe66d;
+  margin-top: 20px;
+}
