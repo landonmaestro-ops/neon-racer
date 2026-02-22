@@ -1,13 +1,14 @@
 {
-  "name": "neon-racer",
+  "name": "battle-royale-shooter",
   "version": "1.0.0",
-  "description": "Multiplayer Neon Racing Game",
+  "description": "Multiplayer battle royale shooter with bots",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^5.2.1",
-    "socket.io": "^4.8.3"
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2",
+    "three": "^0.158.0"
   }
 }
