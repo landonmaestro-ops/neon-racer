@@ -5,74 +5,42 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
+
+// Create io first so it's available everywhere
 const io = new Server(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
-  }
+  },
+  transports: ['websocket', 'polling'] // Ensure compatibility
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Game Constants
 const MAX_PLAYERS = 20;
 const MAP_SIZE = 200;
-const STORM_SHRINK_RATE = 0.5;
-const STORM_DAMAGE = 5;
-const ROUND_WAIT_TIME = 60000; // 60 seconds
+const STORM_SHRINK_RATE = 0.3; // Reduced from 0.5
+const STORM_DAMAGE = 2; // Reduced from 5
+const ROUND_WAIT_TIME = 60000;
 const BOT_NAMES = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Ghost', 'Hunter', 'Iron', 'Joker', 'Killer', 'Lion', 'Maverick', 'Ninja', 'Omega', 'Phantom', 'Quake', 'Raptor', 'Shadow', 'Titan'];
 
-// Weapon Definitions
 const WEAPONS = {
-  assault: {
-    name: 'Assault Rifle',
-    damage: 25,
-    fireRate: 150,
-    maxAmmo: 30,
-    reloadTime: 2000,
-    range: 100,
-    spread: 0.02
-  },
-  machine: {
-    name: 'Machine Gun',
-    damage: 15,
-    fireRate: 80,
-    maxAmmo: 100,
-    reloadTime: 3000,
-    range: 80,
-    spread: 0.04
-  },
-  shotgun: {
-    name: 'Shotgun',
-    damage: 80,
-    fireRate: 800,
-    maxAmmo: 8,
-    reloadTime: 2500,
-    range: 40,
-    pellets: 5,
-    spread: 0.08
-  },
-  sniper: {
-    name: 'Sniper Rifle',
-    damage: 100,
-    fireRate: 1200,
-    maxAmmo: 5,
-    reloadTime: 3000,
-    range: 200,
-    spread: 0.005
-  }
+  assault: { name: 'Assault Rifle', damage: 25, fireRate: 150, maxAmmo: 30, reloadTime: 2000, range: 100, spread: 0.02 },
+  machine: { name: 'Machine Gun', damage: 15, fireRate: 80, maxAmmo: 100, reloadTime: 3000, range: 80, spread: 0.04 },
+  shotgun: { name: 'Shotgun', damage: 80, fireRate: 800, maxAmmo: 8, reloadTime: 2500, range: 40, pellets: 5, spread: 0.08 },
+  sniper: { name: 'Sniper Rifle', damage: 100, fireRate: 1200, maxAmmo: 5, reloadTime: 3000, range: 200, spread: 0.005 }
 };
 
 class GameState {
-  constructor() {
+  constructor(ioInstance) {
+    this.io = ioInstance; // Store io reference
     this.players = new Map();
     this.bots = new Map();
     this.bullets = [];
     this.stormRadius = MAP_SIZE;
     this.stormCenter = { x: 0, z: 0 };
-    this.gamePhase = 'lobby'; // lobby, playing, ending
+    this.gamePhase = 'lobby';
     this.roundStartTime = null;
-    this.roundEndTime = null;
     this.winner = null;
     this.spectators = new Map();
     this.lobbyTimer = null;
@@ -85,8 +53,7 @@ class GameState {
       player.z = (Math.random() - 0.5) * MAP_SIZE * 0.8;
       player.y = 2;
       player.kills = 0;
-      player.weapon = 'assault';
-      player.ammo = WEAPONS.assault.maxAmmo;
+      player.ammo = WEAPONS[player.weapon].maxAmmo;
       player.isAlive = true;
       player.lastShot = 0;
       player.reloading = false;
@@ -102,7 +69,7 @@ class GameState {
   spawnBots(count) {
     const weapons = Object.keys(WEAPONS);
     for (let i = 0; i < count; i++) {
-      const botId = `bot_${i}_${Date.now()}`;
+      const botId = `bot_${i}_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
       const weapon = weapons[Math.floor(Math.random() * weapons.length)];
       const bot = {
         id: botId,
@@ -129,40 +96,36 @@ class GameState {
 
   startRound() {
     this.reset();
-    const botCount = MAX_PLAYERS - this.players.size;
+    const botCount = Math.max(0, MAX_PLAYERS - this.players.size);
     if (botCount > 0) {
       this.spawnBots(botCount);
     }
     this.gamePhase = 'playing';
     this.roundStartTime = Date.now();
     this.stormRadius = MAP_SIZE;
-    
-    // Notify all clients
-    io.emit('gameStart');
+    this.io.emit('gameStart'); // Use this.io instead of global io
   }
 
   endRound(winner) {
     this.gamePhase = 'ending';
     this.winner = winner;
-    this.roundEndTime = Date.now();
-    
     setTimeout(() => {
       this.gamePhase = 'lobby';
       this.roundStartTime = null;
-      io.emit('roundEnded', { winner: winner ? winner.name : 'No one' });
+      this.winner = null;
+      this.io.emit('roundEnded', { winner: winner ? winner.name : 'No one' });
     }, 5000);
   }
 
   updateStorm() {
     if (this.gamePhase !== 'playing') return;
-    
     const elapsed = (Date.now() - this.roundStartTime) / 1000;
     const targetRadius = Math.max(20, MAP_SIZE - (elapsed * STORM_SHRINK_RATE));
     this.stormRadius = Math.max(targetRadius, this.stormRadius - 0.1);
     
-    // Move storm center slightly
-    this.stormCenter.x += (Math.random() - 0.5) * 0.5;
-    this.stormCenter.z += (Math.random() - 0.5) * 0.5;
+    // Keep storm center in bounds
+    this.stormCenter.x = Math.max(-50, Math.min(50, this.stormCenter.x + (Math.random() - 0.5) * 0.5));
+    this.stormCenter.z = Math.max(-50, Math.min(50, this.stormCenter.z + (Math.random() - 0.5) * 0.5));
   }
 
   checkStormDamage() {
@@ -177,7 +140,7 @@ class GameState {
       if (dist > this.stormRadius) {
         entity.hp -= STORM_DAMAGE;
         if (entity.hp <= 0) {
-          this.killPlayer(entity, { name: 'The Storm', isBot: true });
+          this.killPlayer(entity, { name: 'The Storm', isBot: true, id: 'storm' });
         }
       }
     };
@@ -187,17 +150,18 @@ class GameState {
   }
 
   killPlayer(victim, killer) {
+    if (!victim.isAlive) return; // Prevent double kills
     victim.isAlive = false;
     victim.deathTime = Date.now();
     
-    if (killer && killer !== victim) {
+    if (killer && killer !== victim && killer.id !== 'storm') {
       killer.kills++;
     }
     
-    io.emit('playerKilled', {
+    this.io.emit('playerKilled', {
       victim: victim.name || victim.id,
       killer: killer ? (killer.name || killer.id) : 'Unknown',
-      weapon: killer ? killer.weapon : 'storm'
+      weapon: killer && killer.weapon ? killer.weapon : 'storm'
     });
 
     this.checkWinCondition();
@@ -228,10 +192,8 @@ class GameState {
     this.bots.forEach(bot => {
       if (!bot.isAlive) return;
       if (now - bot.lastUpdate < 100) return;
-      
       bot.lastUpdate = now;
 
-      // Find nearest target
       let nearest = null;
       let nearestDist = Infinity;
       
@@ -240,18 +202,18 @@ class GameState {
         const dx = target.x - bot.x;
         const dz = target.z - bot.z;
         const dist = Math.sqrt(dx * dx + dz * dz);
-        if (dist < nearestDist && dist < WEAPONS[bot.weapon].range) {
+        if (dist < nearestDist) {
           nearestDist = dist;
           nearest = target;
         }
       });
 
-      if (nearest) {
+      if (nearest && nearestDist < WEAPONS[bot.weapon].range) {
         bot.target = nearest;
         bot.rotation = Math.atan2(nearest.x - bot.x, nearest.z - bot.z);
         
-        if (nearestDist > 20) {
-          const speed = 0.15;
+        if (nearestDist > 15) {
+          const speed = 0.12;
           bot.x += Math.sin(bot.rotation) * speed;
           bot.z += Math.cos(bot.rotation) * speed;
         }
@@ -261,17 +223,16 @@ class GameState {
           this.shoot(bot);
           bot.lastShot = now;
           bot.ammo--;
-          
-          if (bot.ammo <= 0) {
-            this.reload(bot);
-          }
+          if (bot.ammo <= 0) this.reload(bot);
         }
       } else {
-        bot.rotation += (Math.random() - 0.5) * 0.2;
-        bot.x += Math.sin(bot.rotation) * 0.1;
-        bot.z += Math.cos(bot.rotation) * 0.1;
+        // Wander randomly
+        bot.rotation += (Math.random() - 0.5) * 0.3;
+        bot.x += Math.sin(bot.rotation) * 0.08;
+        bot.z += Math.cos(bot.rotation) * 0.08;
       }
 
+      // Keep in bounds
       bot.x = Math.max(-MAP_SIZE/2, Math.min(MAP_SIZE/2, bot.x));
       bot.z = Math.max(-MAP_SIZE/2, Math.min(MAP_SIZE/2, bot.z));
     });
@@ -279,8 +240,6 @@ class GameState {
 
   shoot(shooter) {
     const weapon = WEAPONS[shooter.weapon];
-    const now = Date.now();
-    
     const bullet = {
       id: Math.random().toString(36),
       owner: shooter.id,
@@ -289,7 +248,7 @@ class GameState {
       z: shooter.z,
       rotation: shooter.rotation,
       damage: weapon.damage,
-      speed: 2,
+      speed: 1.5,
       range: weapon.range,
       distance: 0,
       pellets: weapon.pellets || 1,
@@ -316,16 +275,15 @@ class GameState {
     if (player.reloading) return;
     const weapon = WEAPONS[player.weapon];
     player.reloading = true;
-    
     setTimeout(() => {
-      player.ammo = weapon.maxAmmo;
-      player.reloading = false;
+      if (this.players.has(player.id) || this.bots.has(player.id)) {
+        player.ammo = weapon.maxAmmo;
+        player.reloading = false;
+      }
     }, weapon.reloadTime);
   }
 
   updateBullets() {
-    const now = Date.now();
-    
     for (let i = this.bullets.length - 1; i >= 0; i--) {
       const bullet = this.bullets[i];
       const dx = Math.sin(bullet.rotation) * bullet.speed;
@@ -335,12 +293,19 @@ class GameState {
       bullet.z += dz;
       bullet.distance += bullet.speed;
 
+      // Remove if out of range
+      if (bullet.distance > bullet.range) {
+        this.bullets.splice(i, 1);
+        continue;
+      }
+
       let hit = false;
       
+      // Check players
       for (const player of this.players.values()) {
         if (!player.isAlive || player.id === bullet.owner) continue;
         const dist = Math.sqrt((bullet.x - player.x) ** 2 + (bullet.z - player.z) ** 2);
-        if (dist < 2) {
+        if (dist < 2.5) {
           player.hp -= bullet.damage;
           hit = true;
           if (player.hp <= 0) {
@@ -351,11 +316,12 @@ class GameState {
         }
       }
 
+      // Check bots
       if (!hit) {
         for (const bot of this.bots.values()) {
           if (!bot.isAlive || bot.id === bullet.owner) continue;
           const dist = Math.sqrt((bullet.x - bot.x) ** 2 + (bullet.z - bot.z) ** 2);
-          if (dist < 2) {
+          if (dist < 2.5) {
             bot.hp -= bullet.damage;
             hit = true;
             if (bot.hp <= 0) {
@@ -367,7 +333,7 @@ class GameState {
         }
       }
 
-      if (hit || bullet.distance > bullet.range) {
+      if (hit) {
         this.bullets.splice(i, 1);
       }
     }
@@ -393,7 +359,6 @@ class GameState {
   }
 
   getStateForPlayer(playerId) {
-    const self = this.players.get(playerId);
     return {
       players: Array.from(this.players.values()).map(p => ({
         id: p.id,
@@ -432,14 +397,13 @@ class GameState {
       gamePhase: this.gamePhase,
       leaderboard: this.getLeaderboard(),
       yourId: playerId,
-      winner: this.winner ? (this.winner.name || this.winner.id) : null,
-      timeUntilStart: this.roundStartTime ? Math.max(0, ROUND_WAIT_TIME - (Date.now() - this.roundStartTime)) : null
+      winner: this.winner ? (this.winner.name || this.winner.id) : null
     };
   }
 
   startLobbyTimer() {
     if (this.lobbyTimer) return;
-    this.roundStartTime = Date.now();
+    if (!this.roundStartTime) this.roundStartTime = Date.now();
     
     this.lobbyTimer = setInterval(() => {
       if (this.gamePhase !== 'lobby') {
@@ -450,28 +414,27 @@ class GameState {
       
       const timeLeft = Math.max(0, ROUND_WAIT_TIME - (Date.now() - this.roundStartTime));
       
-      io.emit('lobbyUpdate', {
+      this.io.emit('lobbyUpdate', {
         players: this.players.size,
         maxPlayers: MAX_PLAYERS,
         timeUntilStart: timeLeft
       });
       
-      if (timeLeft <= 0 && this.gamePhase === 'lobby') {
+      if (timeLeft <= 0) {
         clearInterval(this.lobbyTimer);
         this.lobbyTimer = null;
         this.startRound();
       }
-    }, 1000); // Update every second
+    }, 1000);
   }
 }
 
-const game = new GameState();
+// Pass io to GameState
+const game = new GameState(io);
 
-// Socket.io handling
 io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
   
-  // Check if game is full
   if (game.players.size >= MAX_PLAYERS && game.gamePhase === 'playing') {
     socket.emit('gameFull');
     game.spectators.set(socket.id, { id: socket.id, socket });
@@ -479,7 +442,6 @@ io.on('connection', (socket) => {
     return;
   }
 
-  // Create player
   const player = {
     id: socket.id,
     socket: socket,
@@ -500,7 +462,6 @@ io.on('connection', (socket) => {
 
   game.players.set(socket.id, player);
 
-  // Send current game state
   socket.emit('init', {
     playerId: socket.id,
     gamePhase: game.gamePhase,
@@ -508,7 +469,6 @@ io.on('connection', (socket) => {
     mapSize: MAP_SIZE
   });
 
-  // If in lobby, check if we should start timer
   if (game.gamePhase === 'lobby') {
     socket.emit('lobbyUpdate', {
       players: game.players.size,
@@ -523,19 +483,20 @@ io.on('connection', (socket) => {
     socket.emit('spectatorMode', game.getLeaderboard());
   }
 
-  // Handle player input
   socket.on('move', (data) => {
     if (!player.isAlive || game.gamePhase !== 'playing') return;
     
+    // Validate inputs
+    if (typeof data.x !== 'number' || typeof data.z !== 'number') return;
+    
     player.x = Math.max(-MAP_SIZE/2, Math.min(MAP_SIZE/2, data.x));
     player.z = Math.max(-MAP_SIZE/2, Math.min(MAP_SIZE/2, data.z));
-    player.rotation = data.rotation;
-    player.y = data.y || 2;
+    player.rotation = data.rotation || 0;
+    player.y = Math.max(2, Math.min(10, data.y || 2));
   });
 
   socket.on('shoot', () => {
     if (!player.isAlive || game.gamePhase !== 'playing') return;
-    
     const weapon = WEAPONS[player.weapon];
     const now = Date.now();
     
@@ -543,10 +504,7 @@ io.on('connection', (socket) => {
       game.shoot(player);
       player.lastShot = now;
       player.ammo--;
-      
-      if (player.ammo <= 0) {
-        game.reload(player);
-      }
+      if (player.ammo <= 0) game.reload(player);
     }
   });
 
@@ -556,14 +514,19 @@ io.on('connection', (socket) => {
   });
 
   socket.on('weaponChange', (weapon) => {
-    if (WEAPONS[weapon] && !player.reloading && game.gamePhase === 'playing') {
-      player.weapon = weapon;
-      player.ammo = WEAPONS[weapon].maxAmmo;
-    }
+    if (!WEAPONS[weapon]) return;
+    if (player.reloading) return;
+    
+    player.weapon = weapon;
+    player.ammo = WEAPONS[weapon].maxAmmo;
+    player.reloading = false; // Cancel reload on switch
+    socket.emit('weaponSelected', weapon);
   });
 
   socket.on('setName', (name) => {
-    player.name = name || player.name;
+    if (typeof name === 'string' && name.length > 0 && name.length < 20) {
+      player.name = name;
+    }
   });
 
   socket.on('disconnect', () => {
@@ -575,10 +538,9 @@ io.on('connection', (socket) => {
       game.killPlayer(player, null);
     }
     
-    // If no players left, reset lobby
     if (game.players.size === 0 && game.gamePhase === 'lobby') {
       if (game.lobbyTimer) {
-        clearInterval(game.lobbyTimer);
+        clearInterval(this.lobbyTimer);
         game.lobbyTimer = null;
         game.roundStartTime = null;
       }
@@ -586,22 +548,25 @@ io.on('connection', (socket) => {
   });
 });
 
-// Game loop
+// Game loop at 20 FPS (reduced from 30 for performance)
 setInterval(() => {
   game.updateStorm();
   game.checkStormDamage();
   game.updateBots();
   game.updateBullets();
 
-  // Send updates to all clients
   game.players.forEach((player, id) => {
-    player.socket.emit('gameState', game.getStateForPlayer(id));
+    if (player.socket.connected) {
+      player.socket.emit('gameState', game.getStateForPlayer(id));
+    }
   });
 
   game.spectators.forEach((spec) => {
-    spec.socket.emit('spectatorUpdate', game.getLeaderboard());
+    if (spec.socket.connected) {
+      spec.socket.emit('spectatorUpdate', game.getLeaderboard());
+    }
   });
-}, 1000 / 30); // 30 FPS
+}, 1000 / 20);
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
